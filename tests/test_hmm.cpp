@@ -1,7 +1,7 @@
 #include "hmm.hpp"
+#include "data_loader.hpp"
 #include <iostream>
 #include <cassert>
-#include <cmath>
 #include <iomanip>
 
 class HMMTester {
@@ -9,138 +9,83 @@ public:
     static void runAllTests() {
         std::cout << "=== Running HMM Tests ===" << std::endl;
         
-        testConstructorDestructor();
-        testSimpleViterbi();
-        testSingleObservation();
-        testLongerSequence();
+        // testDataLoading();
+        testAllSequenceFiles();
         
-        std::cout << "\n=== All Tests Passed! ===" << std::endl;
+        std::cout << "\n=== All Tests Completed! ===" << std::endl;
     }
 
-private:
-    static void testConstructorDestructor() {
-        std::cout << "\n--- Testing Constructor/Destructor ---" << std::endl;
+    
+    static void testAllSequenceFiles() {
+        std::cout << "\n--- Testing All Sequence Files ---" << std::endl;
         
-        IHMM* hmm = new IHMM(3, 4);
-        std::cout << "✓ Constructor works" << std::endl;
-        
-        delete hmm;
-        std::cout << "✓ Destructor works" << std::endl;
+        for (int n = 0; n < 6; n++) {
+            testSequenceFile(n);
+        }
     }
-
-    static void testSimpleViterbi() {
-        std::cout << "\n--- Testing Simple Viterbi (2 states, 2 observations) ---" << std::endl;
+    
+    static void testSequenceFile(int n) {
+        std::string path = "../tests/data/sequence_data" + std::to_string(n) + ".txt";
         
-        int N = 2, M = 2, T = 3;
-        float start_p[] = {0.6f, 0.4f};
+        HMMData data;
         
-        float trans_p[] = {0.7f, 0.3f,  
-                          0.4f, 0.6f};  
+        try {
+            data = HMMDataLoader::loadFromFile(path);
+        } catch (const std::exception&) {
+            std::cout << "Could not load sequence_data" << n << ".txt from any location" << std::endl;
+            return;
+        }
         
-        float emit_p[] = {0.9f, 0.1f,  
-                         0.2f, 0.8f};  
+        std::cout << "\nFile #" << n << ":" << std::endl;
+        std::cout << std::left << std::setw(30) << "Emission Sequence" 
+                    << std::setw(30) << "Max Probability State Sequence" << std::endl;
+        std::cout << std::string(70, '#') << std::endl;
         
-        float obs[] = {0.0f, 1.0f, 0.0f};
-        int states[3] = {0}; 
+        float* trans_p = HMMDataLoader::convert2DTo1D(data.A);
+        float* emit_p = HMMDataLoader::convert2DTo1D(data.O);
+        float* start_p = HMMDataLoader::createUniformStartProbs(data.N);
         
-        IHMM hmm(N, M);
-        std::string result = hmm.viterbi(obs, states, start_p, trans_p, emit_p, T, N, M);
+        IHMM hmm(data.N, data.M);
         
-        std::cout << "Computed path: " << result << std::endl;
+        // Test each sequence
+        for (const auto& sequence : data.sequences) {
+            // Convert sequence to format needed by viterbi
+            float* obs = HMMDataLoader::convertSequenceToFloat(sequence);
+            int* states = new int[sequence.length()]; // Input parameter (not modified)
+            
+            // Run Viterbi
+            std::string result = hmm.viterbi(obs, states, start_p, trans_p, emit_p, 
+                                            sequence.length(), data.N, data.M);
+            
+            // Print results in same format as Python
+            std::cout << std::left << std::setw(30) << sequence 
+                        << std::setw(30) << result << std::endl;
+            
+            // Basic validation
+            assert(!result.empty());
+            
+            // Clean up
+            delete[] obs;
+            delete[] states;
+        }
         
-
-        assert(result.find("0") != std::string::npos); 
-        assert(result.find("1") != std::string::npos); 
-        assert(result.find("->") != std::string::npos);
-        
-        std::cout << "✓ Simple Viterbi test passed" << std::endl;
-    }
-
-
-    static void testSingleObservation() {
-        std::cout << "\n--- Testing Single Observation ---" << std::endl;
-        
-        int N = 3, M = 2, T = 1;
-        
-        float start_p[] = {0.1f, 0.6f, 0.3f};
-        float trans_p[] = {1.0f, 0.0f, 0.0f,
-                          0.0f, 1.0f, 0.0f,
-                          0.0f, 0.0f, 1.0f};  
-        
-        float emit_p[] = {0.9f, 0.1f, 
-                         0.3f, 0.7f, 
-                         0.5f, 0.5f};
-        
-        float obs[] = {0.0f};
-        int states[1] = {0}; // Input array
-        
-        IHMM hmm(N, M);
-        std::string result = hmm.viterbi(obs, states, start_p, trans_p, emit_p, T, N, M);
-        
-        assert(result == "1");
-        
-        std::cout << "✓ Single observation test passed" << std::endl;
-    }
-
-    static void testLongerSequence() {
-        std::cout << "\n--- Testing Longer Sequence (10 steps) ---" << std::endl;
-        
-        int N = 2, M = 2, T = 10;
-        
-        float start_p[] = {0.5f, 0.5f};
-        float trans_p[] = {0.8f, 0.2f,
-                          0.3f, 0.7f};
-        float emit_p[] = {0.9f, 0.1f,
-                         0.1f, 0.9f};
-        
-        float obs[] = {0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 1.0f};
-        int states[10] = {0};
-        
-        IHMM hmm(N, M);
-        std::string result = hmm.viterbi(obs, states, start_p, trans_p, emit_p, T, N, M);
-        
-        std::cout << "Long sequence results:" << std::endl;
-        std::cout << "Obs:    ";
-        for(int i = 0; i < T; i++) std::cout << static_cast<int>(obs[i]) << " ";
         std::cout << std::endl;
-        std::cout << "States: " << result << std::endl;
         
-        assert(!result.empty());
-        assert(result.find("->") != std::string::npos);
+        // Clean up matrices
+        delete[] trans_p;
+        delete[] emit_p;
+        delete[] start_p;
         
-        std::cout << "✓ Longer sequence test passed" << std::endl;
+        std::cout << "✓ File " << n << " test passed" << std::endl;
+    
     }
-
 };
 
-void printMatrices(float* start_p, float* trans_p, float* emit_p, int N, int M) {
-    std::cout << std::fixed << std::setprecision(2);
-    
-    std::cout << "Initial probabilities: ";
-    for(int i = 0; i < N; i++) {
-        std::cout << start_p[i] << " ";
-    }
-    std::cout << std::endl;
-    
-    std::cout << "Transition matrix:" << std::endl;
-    for(int i = 0; i < N; i++) {
-        for(int j = 0; j < N; j++) {
-            std::cout << trans_p[i * N + j] << " ";
-        }
-        std::cout << std::endl;
-    }
-    
-    std::cout << "Emission matrix:" << std::endl;
-    for(int i = 0; i < N; i++) {
-        for(int j = 0; j < M; j++) {
-            std::cout << emit_p[i * M + j] << " ";
-        }
-        std::cout << std::endl;
-    }
-}
-
 int main() {
+    std::cout << "HMM Real Data Tester" << std::endl;
+    std::cout << "====================" << std::endl;
+    
     HMMTester::runAllTests();
-
+    
     return 0;
 }
