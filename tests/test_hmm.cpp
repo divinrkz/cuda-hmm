@@ -8,25 +8,20 @@ class HMMTester {
 public:
     static void runAllTests() {
         std::cout << "=== Running HMM Tests ===" << std::endl;
-        
-        // testDataLoading();
         testAllSequenceFiles();
-        
         std::cout << "\n=== All Tests Completed! ===" << std::endl;
     }
 
     
     static void testAllSequenceFiles() {
         std::cout << "\n--- Testing All Sequence Files ---" << std::endl;
-        
         for (int n = 0; n < 6; n++) {
-            testSequenceFile(n);
+            testViterbiSequenceFile(n);
         }
     }
     
-    static void testSequenceFile(int n) {
+    static void testViterbiSequenceFile(int n) {
         std::string path = "../tests/data/sequence_data" + std::to_string(n) + ".txt";
-        
         HMMData data;
         
         try {
@@ -46,43 +41,36 @@ public:
         float* start_p = HMMDataLoader::createUniformStartProbs(data.N);
         
         IHMM hmm(data.N, data.M);
-        
-        // Test each sequence
+
         for (const auto& sequence : data.sequences) {
-            // Convert sequence to format needed by viterbi
+
             float* obs = HMMDataLoader::convertSequenceToFloat(sequence);
-            int* states = new int[sequence.length()]; // Input parameter (not modified)
+            int* states = new int[sequence.length()]; 
             
             // Run Viterbi
             std::string result = hmm.viterbi(obs, states, start_p, trans_p, emit_p, 
-                                            sequence.length(), data.N, data.M);
-            
-            // Print results in same format as Python
+                                            sequence.length(), data.N, data.M);        
+            // Print results in same format as the Python
             std::cout << std::left << std::setw(30) << sequence 
-                        << std::setw(30) << result << std::endl;
-            
-            // Basic validation
+                        << std::setw(30) << result << std::endl;       
             assert(!result.empty());
-            
-            // Clean up
+            // would probably want to check if the result is correct like get solution set from 155 and compare to that.      
             delete[] obs;
             delete[] states;
         }
         
         std::cout << std::endl;
-        
-        // Clean up matrices
+    
         delete[] trans_p;
         delete[] emit_p;
         delete[] start_p;
         
-        std::cout << "✓ File " << n << " test passed" << std::endl;
-    
+        std::cout << "File " << n << " test passed" << std::endl;
     }
 };
 
 int main() {
-    std::cout << "HMM Real Data Tester" << std::endl;
+    std::cout << "HMM Tester" << std::endl;
     std::cout << "====================" << std::endl;
     
     HMMTester::runAllTests();
