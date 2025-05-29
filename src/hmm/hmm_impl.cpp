@@ -53,7 +53,7 @@ float **IHMM::forward(float *obs, int *states, float *start_p, float *trans_p, f
 
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    std::cout << "Forward algorithm execution time: " << format_duration(duration) << std::endl;
+    // std::cout << "Forward algorithm execution time: " << format_duration(duration) << std::endl;
 
     return alphas;
 }
@@ -92,7 +92,7 @@ float **IHMM::backward(float *obs, int *states, float *start_p, float *trans_p, 
 
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    std::cout << "Backward algorithm execution time: " << format_duration(duration) << std::endl;
+    // std::cout << "Backward algorithm execution time: " << format_duration(duration) << std::endl;
 
     return betas;
 }
@@ -225,7 +225,7 @@ void IHMM::baum_welch(float *obs, int *states, float *start_p, float *trans_p, f
 
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    std::cout << "Baum-Welch algorithm execution time: " << format_duration(duration) << std::endl;
+    // std::cout << "Baum-Welch algorithm execution time: " << format_duration(duration) << std::endl;
 }
 
 void IHMM::forward_backward(float *obs, int *states, float *start_p, float *trans_p, float *emit_p, int T, int N, int M)
@@ -289,7 +289,7 @@ std::string IHMM::viterbi(float *obs, int *states, float *start_p, float *trans_
 
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    std::cout << "Viterbi algorithm execution time: " << format_duration(duration) << std::endl;
+    // std::cout << "Viterbi algorithm execution time: " << format_duration(duration) << std::endl;
 
     int *optimal_path = new int[T];
 
@@ -306,11 +306,11 @@ std::string IHMM::viterbi(float *obs, int *states, float *start_p, float *trans_
         state_str << optimal_path[i];
         if (i < T - 1)
         {
-            state_str << " -> ";
+            state_str << "";
         }
     }
 
-    std::cout << "Most likely path: " << state_str.str() << std::endl;
+    // std::cout << "Most likely path: " << state_str.str() << std::endl;
 
     // Clean up
     for (int i = 0; i < N; i++)
