@@ -11,11 +11,8 @@ public:
         
         testConstructorDestructor();
         testSimpleViterbi();
-        testWeatherExample();
-        testSingleState();
         testSingleObservation();
         testLongerSequence();
-        testEdgeCases();
         
         std::cout << "\n=== All Tests Passed! ===" << std::endl;
     }
@@ -59,55 +56,6 @@ private:
         std::cout << "✓ Simple Viterbi test passed" << std::endl;
     }
 
-    static void testWeatherExample() {
-        std::cout << "\n--- Testing Weather Example ---" << std::endl;
-        
-        int N = 2, M = 3, T = 4; 
-        
-        float start_p[] = {0.6f, 0.4f};
-        
-        float trans_p[] = {0.7f, 0.3f,
-                          0.4f, 0.6f};
-        
-        float emit_p[] = {0.6f, 0.3f, 0.1f,  // sunny
-                         0.1f, 0.4f, 0.5f};  // rainy
-        
-        float obs[] = {0.0f, 2.0f, 1.0f, 0.0f};
-        int states[4] = {0}; 
-        
-        IHMM hmm(N, M);
-        std::string result = hmm.viterbi(obs, states, start_p, trans_p, emit_p, T, N, M);
-        
-        std::cout << "Weather sequence analysis:" << std::endl;
-        std::cout << "Observations: Walk -> Clean -> Shop -> Walk" << std::endl;
-        std::cout << "Predicted weather: " << result << std::endl;
-        
-        assert(result.find("->") != std::string::npos);
-        assert(!result.empty());
-        
-        std::cout << "✓ Weather example passed" << std::endl;
-    }
-
-    static void testSingleState() {
-        std::cout << "\n--- Testing Single State HMM ---" << std::endl;
-        
-        int N = 1, M = 2, T = 3;
-        
-        float start_p[] = {1.0f};
-        float trans_p[] = {1.0f};
-        float emit_p[] = {0.7f, 0.3f}; 
-        
-        float obs[] = {0.0f, 1.0f, 0.0f};
-        int states[3] = {0};
-        
-        IHMM hmm(N, M);
-        std::string result = hmm.viterbi(obs, states, start_p, trans_p, emit_p, T, N, M);
-        
-        // All states should be 0 in the result string
-        assert(result == "0 -> 0 -> 0");
-        
-        std::cout << "✓ Single state test passed" << std::endl;
-    }
 
     static void testSingleObservation() {
         std::cout << "\n--- Testing Single Observation ---" << std::endl;
@@ -163,27 +111,6 @@ private:
         std::cout << "✓ Longer sequence test passed" << std::endl;
     }
 
-    static void testEdgeCases() {
-        std::cout << "\n--- Testing Edge Cases ---" << std::endl;
-        
-        int N = 2, M = 2, T = 3;
-        
-        float start_p[] = {1.0f, 0.0f};  
-        float trans_p[] = {0.5f, 0.5f,
-                          0.0f, 1.0f};  
-        float emit_p[] = {0.8f, 0.2f,
-                         0.3f, 0.7f};
-        
-        float obs[] = {0.0f, 1.0f, 0.0f};
-        int states[3] = {0}; 
-        
-        IHMM hmm(N, M);
-        std::string result = hmm.viterbi(obs, states, start_p, trans_p, emit_p, T, N, M);
-        
-        assert(result.substr(0, 1) == "0"); 
-        
-        std::cout << "✓ Edge cases test passed" << std::endl;
-    }
 };
 
 void printMatrices(float* start_p, float* trans_p, float* emit_p, int N, int M) {

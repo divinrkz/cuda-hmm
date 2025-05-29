@@ -1,9 +1,28 @@
 #include "hmm.hpp"
 #include <sstream>
 #include <iostream>
+#include <chrono>
+#include <iomanip>
+
+// Helper function to format duration
+std::string format_duration(std::chrono::microseconds duration) {
+    std::ostringstream ss;
+    ss << std::fixed << std::setprecision(3);
+    if (duration.count() < 1000) {
+        ss << duration.count() << " µs";
+    } else if (duration.count() < 1000000) {
+        ss << (duration.count() / 1000.0) << " ms";
+    } else {
+        ss << (duration.count() / 1000000.0) << " s";
+    }
+    return ss.str();
+}
+
 
 float **IHMM::forward(float *obs, int *states, float *start_p, float *trans_p, float *emit_p, int T, int N, int M)
 {
+    auto start = std::chrono::high_resolution_clock::now();
+    
     // Create and initialize alphas (T+1 x N matrix)
     float **alphas = new float *[T + 1];
     for (int t = 0; t <= T; t++)
@@ -31,11 +50,18 @@ float **IHMM::forward(float *obs, int *states, float *start_p, float *trans_p, f
             alphas[t][curr_state] = prob;
         }
     }
+
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+    std::cout << "Forward algorithm execution time: " << format_duration(duration) << std::endl;
+
     return alphas;
 }
 
 float **IHMM::backward(float *obs, int *states, float *start_p, float *trans_p, float *emit_p, int T, int N, int M)
 {
+    auto start = std::chrono::high_resolution_clock::now();
+    
     // Create and initialize betas (T+1 x N matrix)
     float **betas = new float *[T + 1];
     for (int t = 0; t <= T; t++)
@@ -64,12 +90,18 @@ float **IHMM::backward(float *obs, int *states, float *start_p, float *trans_p, 
         }
     }
 
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+    std::cout << "Backward algorithm execution time: " << format_duration(duration) << std::endl;
+
     return betas;
 }
 
 void IHMM::baum_welch(float *obs, int *states, float *start_p, float *trans_p, float *emit_p, int T, int N, int M, int N_iters)
 {
     // assumes start_p, trans_p, emit_p are randomly initialized
+    auto start = std::chrono::high_resolution_clock::now();
+    
 
     float **alphas = nullptr;
     float **betas = nullptr;
@@ -190,6 +222,10 @@ void IHMM::baum_welch(float *obs, int *states, float *start_p, float *trans_p, f
     }
     delete[] gamma;
     delete[] xi;
+
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+    std::cout << "Baum-Welch algorithm execution time: " << format_duration(duration) << std::endl;
 }
 
 void IHMM::forward_backward(float *obs, int *states, float *start_p, float *trans_p, float *emit_p, int T, int N, int M)
@@ -199,6 +235,8 @@ void IHMM::forward_backward(float *obs, int *states, float *start_p, float *tran
 
 std::string IHMM::viterbi(float *obs, int *states, float *start_p, float *trans_p, float *emit_p, int T, int N, int M)
 {
+    auto start = std::chrono::high_resolution_clock::now();
+
     float **V = new float *[N];
     int **path = new int *[N];
 
@@ -248,6 +286,10 @@ std::string IHMM::viterbi(float *obs, int *states, float *start_p, float *trans_
             max_state = i;
         }
     }
+
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+    std::cout << "Viterbi algorithm execution time: " << format_duration(duration) << std::endl;
 
     int *optimal_path = new int[T];
 
