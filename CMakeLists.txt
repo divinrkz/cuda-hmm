@@ -11,7 +11,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 enable_testing()
 
 # Add source files
-add_executable(${PROJECT_NAME} src/main.cpp)
+add_executable(${PROJECT_NAME} src/main.cpp src/hmm/hmm_impl.cpp)
 
 # Add test executable
 add_executable(test_hmm tests/test_hmm.cpp src/hmm/hmm_impl.cpp)

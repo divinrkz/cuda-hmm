@@ -5,24 +5,29 @@
 #include <iomanip>
 
 // Helper function to format duration
-std::string format_duration(std::chrono::microseconds duration) {
+std::string format_duration(std::chrono::microseconds duration)
+{
     std::ostringstream ss;
     ss << std::fixed << std::setprecision(3);
-    if (duration.count() < 1000) {
+    if (duration.count() < 1000)
+    {
         ss << duration.count() << " µs";
-    } else if (duration.count() < 1000000) {
+    }
+    else if (duration.count() < 1000000)
+    {
         ss << (duration.count() / 1000.0) << " ms";
-    } else {
+    }
+    else
+    {
         ss << (duration.count() / 1000000.0) << " s";
     }
     return ss.str();
 }
 
-
 float **IHMM::forward(float *obs, int *states, float *start_p, float *trans_p, float *emit_p, int T, int N, int M)
 {
     auto start = std::chrono::high_resolution_clock::now();
-    
+
     // Create and initialize alphas (T+1 x N matrix)
     float **alphas = new float *[T + 1];
     for (int t = 0; t <= T; t++)
@@ -61,7 +66,7 @@ float **IHMM::forward(float *obs, int *states, float *start_p, float *trans_p, f
 float **IHMM::backward(float *obs, int *states, float *start_p, float *trans_p, float *emit_p, int T, int N, int M)
 {
     auto start = std::chrono::high_resolution_clock::now();
-    
+
     // Create and initialize betas (T+1 x N matrix)
     float **betas = new float *[T + 1];
     for (int t = 0; t <= T; t++)
@@ -83,8 +88,16 @@ float **IHMM::backward(float *obs, int *states, float *start_p, float *trans_p, 
             float prob = 0.0f;
             for (int next_state = 0; next_state < N; next_state++)
             {
-                prob += emit_p[next_state * M + static_cast<int>(obs[t + 1])] *
-                        (betas[t + 1][next_state] * trans_p[curr_state * N + next_state]);
+                if (t == 0)
+                {
+                    // Special case for t=0: use start probabilities
+                    prob += betas[t + 1][next_state] * start_p[next_state] * emit_p[next_state * M + static_cast<int>(obs[t])];
+                }
+                else
+                {
+                    // Regular case: use transition probabilities
+                    prob += betas[t + 1][next_state] * trans_p[curr_state * N + next_state] * emit_p[next_state * M + static_cast<int>(obs[t])];
+                }
             }
             betas[t][curr_state] = prob;
         }
@@ -101,7 +114,6 @@ void IHMM::baum_welch(float *obs, int *states, float *start_p, float *trans_p, f
 {
     // assumes start_p, trans_p, emit_p are randomly initialized
     auto start = std::chrono::high_resolution_clock::now();
-    
 
     float **alphas = nullptr;
     float **betas = nullptr;
