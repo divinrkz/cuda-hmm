@@ -7,7 +7,6 @@
 class HMMTester {
 public:
     static void runAllTests() {
-        std::cout << "=== Running HMM Tests ===" << std::endl;
         testAllSequenceFiles();
         std::cout << "\n=== All Tests Completed! ===" << std::endl;
     }
@@ -70,7 +69,7 @@ public:
 };
 
 int main() {
-    std::cout << "HMM Tester" << std::endl;
+    std::cout << "HMM Tests" << std::endl;
     std::cout << "====================" << std::endl;
     
     HMMTester::runAllTests();

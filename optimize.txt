@@ -1,0 +1,46 @@
+ HMMs have this issue where you can't parallelize time because each time step depends on the previous one.
+BUT, you can totally parallelize across states at each time step. 
+
+1. Forward/Backward Kernels
+- Each GPU thread computes one state's probability
+- The inner loop (over j) is still sequential because each thread needs to sum over ALL previous states
+- N threads, so you get O(N)`parallelism.
+
+I think we can do better since That inner loop is doing N memory reads per thread.
+We can use shared memory or even warp-level reductions to optimize this.
+
+
+2. Viterbi Kernel
+We are using shared memory to cache the previous time step's values. 
+
+1. Each block loads part of the previous V values into shared memory
+2. Threads access shared memory fast for the first blockDim.x states
+3. then we fall back to global memory for the rest.
+
+
+I guess we can use multiple blocks to cover all of V_prev in shared memory,
+or warp shuffle ??? 
+
+
+convertToLogSpace(); converting everything to log space, which means addition instead of multiplication (faster)
+ and No underflow issues for long sequences.
+
+
+Doing something like this: 
+float* temp = d_V_curr;
+d_V_curr = d_V_prev;
+d_V_prev = temp;
+
+here Instead of allocating T * N memory, just swap two N-sized buffers. Memory savings = massive for long sequences.
+
+
+WE ARE Using Thrust for the parallel parts like initialization and reductions
+Thrust is heavily optimized, so faster than writing custom kernels. (not sure if this is allowed ??)
+
+
+-----
+The Baum-Welch implementation is not optimal (i think we can do better):
+We calling forward/backward for each iteration, which means a lot of memory allocation/deallocation. 
+If we do
+- Reusing memory across iterations.
+- Using streams for overlapping computation.
