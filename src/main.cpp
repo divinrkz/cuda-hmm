@@ -5,418 +5,329 @@
 #include <string>
 #include <cstring>
 #include <iomanip>
-#include "hmm.hpp"
+#include <algorithm>
+#include "hmm.hpp"     // Original CPU implementation header
+#include "hmm_gpu.cuh" // GPU implementation header
 
+// -----------------------------------------------------------------------------
+// Configuration Parsing (ported from the user-provided code)
+// -----------------------------------------------------------------------------
 struct HMMConfig
 {
-    int N; // number of states
-    int M; // number of observations
-    std::vector<float> start_p;
-    std::vector<std::vector<float>> trans_p;
-    std::vector<std::vector<float>> emit_p;
-    std::vector<std::vector<int>> sequences;
+    int N, M;                                // states, observations
+    std::vector<float> start_p;              // initial probabilities
+    std::vector<std::vector<float>> trans_p; // transition matrix
+    std::vector<std::vector<float>> emit_p;  // emission matrix
+    std::vector<std::vector<int>> sequences; // observation sequences
 };
 
+// Parse a configuration file in the same format previously supported
 HMMConfig parseConfigFile(const std::string &filename)
 {
     std::ifstream file(filename);
     if (!file.is_open())
-    {
         throw std::runtime_error("Cannot open config file: " + filename);
-    }
 
     HMMConfig config;
     std::string line;
     std::vector<std::string> lines;
 
-    // Read all non-comment, non-empty lines
+    // Consume non-comment lines
     while (std::getline(file, line))
     {
-        // Remove leading/trailing whitespace
         line.erase(0, line.find_first_not_of(" \t\r\n"));
         line.erase(line.find_last_not_of(" \t\r\n") + 1);
-
         if (!line.empty() && line[0] != '#')
-        {
             lines.push_back(line);
-        }
     }
 
     size_t idx = 0;
-
-    // Parse number of states
     config.N = std::stoi(lines[idx++]);
-
-    // Parse number of observations
     config.M = std::stoi(lines[idx++]);
 
-    // Parse initial state probabilities
-    std::istringstream iss(lines[idx++]);
+    // start probabilities
+    std::istringstream iss_start(lines[idx++]);
     std::string token;
-    while (iss >> token)
-    {
+    while (iss_start >> token)
         config.start_p.push_back(std::stof(token));
-    }
 
-    // Parse transition matrix
+    // transition matrix
     config.trans_p.resize(config.N);
-    for (int i = 0; i < config.N; i++)
+    for (int i = 0; i < config.N; ++i)
     {
-        std::istringstream iss(lines[idx++]);
-        while (iss >> token)
-        {
+        std::istringstream row(lines[idx++]);
+        while (row >> token)
             config.trans_p[i].push_back(std::stof(token));
-        }
     }
 
-    // Parse emission matrix
+    // emission matrix
     config.emit_p.resize(config.N);
-    for (int i = 0; i < config.N; i++)
+    for (int i = 0; i < config.N; ++i)
     {
-        std::istringstream iss(lines[idx++]);
-        while (iss >> token)
-        {
+        std::istringstream row(lines[idx++]);
+        while (row >> token)
             config.emit_p[i].push_back(std::stof(token));
-        }
     }
 
-    // Parse sequence info
+    // sequences
     std::istringstream seq_info(lines[idx++]);
     int num_sequences, seq_length;
     seq_info >> num_sequences >> seq_length;
 
-    // Parse observation sequences
     std::vector<int> all_obs;
-    for (size_t i = idx; i < lines.size(); i++)
+    for (size_t i = idx; i < lines.size(); ++i)
     {
-        std::istringstream iss(lines[i]);
-        while (iss >> token)
-        {
+        std::istringstream row(lines[i]);
+        while (row >> token)
             all_obs.push_back(std::stoi(token));
-        }
     }
 
-    // Split into individual sequences
     config.sequences.resize(num_sequences);
-    for (int i = 0; i < num_sequences; i++)
+    for (int i = 0; i < num_sequences; ++i)
     {
-        config.sequences[i].resize(seq_length);
-        for (int j = 0; j < seq_length; j++)
-        {
-            config.sequences[i][j] = all_obs[i * seq_length + j];
-        }
+        auto first = all_obs.begin() + i * seq_length;
+        auto last = first + seq_length;
+        config.sequences[i].assign(first, last);
     }
 
     return config;
 }
 
-void runForwardAlgorithm(const HMMConfig &config)
+// -----------------------------------------------------------------------------
+// Helper to flatten 2-D std::vector<float> into 1-D for C-style routines
+// -----------------------------------------------------------------------------
+static void flatten_vector(const std::vector<std::vector<float>> &mat,
+                           std::vector<float> &flat)
 {
-    IHMM hmm(config.N, config.M);
-
-    // Convert data structures to arrays
-    float *start_p = new float[config.N];
-    float *trans_p = new float[config.N * config.N];
-    float *emit_p = new float[config.N * config.M];
-
-    for (int i = 0; i < config.N; i++)
-    {
-        start_p[i] = config.start_p[i];
-    }
-
-    for (int i = 0; i < config.N; i++)
-    {
-        for (int j = 0; j < config.N; j++)
-        {
-            trans_p[i * config.N + j] = config.trans_p[i][j];
-        }
-    }
-
-    for (int i = 0; i < config.N; i++)
-    {
-        for (int j = 0; j < config.M; j++)
-        {
-            emit_p[i * config.M + j] = config.emit_p[i][j];
-        }
-    }
-
-    // Process each sequence
-    for (const auto &sequence : config.sequences)
-    {
-        float *obs = new float[sequence.size()];
-        for (size_t i = 0; i < sequence.size(); i++)
-        {
-            obs[i] = static_cast<float>(sequence[i]);
-        }
-
-        float **alphas = hmm.forward(obs, nullptr, start_p, trans_p, emit_p,
-                                     sequence.size(), config.N, config.M);
-
-        // Calculate total probability
-        float total_prob = 0.0f;
-        for (int i = 0; i < config.N; i++)
-        {
-            total_prob += alphas[sequence.size()][i];
-        }
-
-        std::cout << std::scientific << std::setprecision(6) << total_prob << std::endl;
-
-        // Clean up alphas
-        for (size_t t = 0; t <= sequence.size(); t++)
-        {
-            delete[] alphas[t];
-        }
-        delete[] alphas;
-        delete[] obs;
-    }
-
-    delete[] start_p;
-    delete[] trans_p;
-    delete[] emit_p;
+    flat.clear();
+    for (const auto &row : mat)
+        flat.insert(flat.end(), row.begin(), row.end());
 }
 
-void runViterbiAlgorithm(const HMMConfig &config)
+// -----------------------------------------------------------------------------
+// Unified driver capable of running either CPU or GPU implementation
+// -----------------------------------------------------------------------------
+static void run(const HMMConfig &cfg, int problem, int iterations,
+                const std::string &impl)
 {
-    IHMM hmm(config.N, config.M);
+    // Pre-flatten matrices for both back-ends
+    std::vector<float> A_flat, B_flat;
+    flatten_vector(cfg.trans_p, A_flat);
+    flatten_vector(cfg.emit_p, B_flat);
 
-    // Convert data structures to arrays
-    float *start_p = new float[config.N];
-    float *trans_p = new float[config.N * config.N];
-    float *emit_p = new float[config.N * config.M];
-
-    for (int i = 0; i < config.N; i++)
+    // ---------------- CPU branch ----------------
+    if (impl == "cpu")
     {
-        start_p[i] = config.start_p[i];
-    }
+        IHMM hmm_cpu(cfg.N, cfg.M);
 
-    for (int i = 0; i < config.N; i++)
-    {
-        for (int j = 0; j < config.N; j++)
+        switch (problem)
         {
-            trans_p[i * config.N + j] = config.trans_p[i][j];
+        case 2: // Viterbi
+            for (const auto &seq : cfg.sequences)
+            {
+                // IHMM expects observations as floats – convert the int sequence
+                std::vector<float> obs_f(seq.begin(), seq.end());
+
+                std::string path = hmm_cpu.viterbi(obs_f.data(),
+                                                   /*states*/ nullptr,
+                                                   const_cast<float *>(cfg.start_p.data()),
+                                                   A_flat.data(),
+                                                   B_flat.data(),
+                                                   static_cast<int>(seq.size()),
+                                                   cfg.N, cfg.M);
+                std::cout << path << std::endl;
+            }
+            break;
+        case 3:
+        { // Baum-Welch (training)
+            if (cfg.sequences.empty())
+            {
+                std::cerr << "No sequences provided in configuration file." << std::endl;
+                return;
+            }
+
+            // Copies because Baum-Welch updates them in-place
+            std::vector<float> A_train = A_flat;
+            std::vector<float> B_train = B_flat;
+            std::vector<float> pi_train = cfg.start_p;
+
+            const std::vector<int> &obs_int = cfg.sequences[0];
+            std::vector<float> obs_f(obs_int.begin(), obs_int.end());
+
+            hmm_cpu.baum_welch(obs_f.data(),
+                               /*states*/ nullptr,
+                               pi_train.data(),
+                               A_train.data(),
+                               B_train.data(),
+                               static_cast<int>(obs_f.size()),
+                               cfg.N,
+                               cfg.M,
+                               iterations);
+
+            // Output trained parameters (same format expected by test suite)
+            std::cout << std::fixed << std::setprecision(6);
+
+            for (int i = 0; i < cfg.N; ++i)
+            {
+                std::cout << pi_train[i] << (i == cfg.N - 1 ? "" : " ");
+            }
+            std::cout << std::endl;
+
+            for (int i = 0; i < cfg.N; ++i)
+            {
+                for (int j = 0; j < cfg.N; ++j)
+                {
+                    std::cout << A_train[i * cfg.N + j] << (j == cfg.N - 1 ? "" : " ");
+                }
+                std::cout << std::endl;
+            }
+
+            for (int i = 0; i < cfg.N; ++i)
+            {
+                for (int j = 0; j < cfg.M; ++j)
+                {
+                    std::cout << B_train[i * cfg.M + j] << (j == cfg.M - 1 ? "" : " ");
+                }
+                std::cout << std::endl;
+            }
+            break;
         }
+        default:
+            std::cerr << "Selected problem not supported on CPU path in this driver." << std::endl;
+            break;
+        }
+        return;
     }
 
-    for (int i = 0; i < config.N; i++)
+    // ---------------- GPU branch ----------------
+    if (impl == "gpu")
     {
-        for (int j = 0; j < config.M; j++)
-        {
-            emit_p[i * config.M + j] = config.emit_p[i][j];
+        int max_T = 0;
+        for (const auto &seq : cfg.sequences)
+            max_T = std::max(max_T, static_cast<int>(seq.size()));
+
+        HMM_GPU hmm_gpu(cfg.N, cfg.M, max_T);
+
+        if (problem == 2)
+        { // Viterbi
+            for (const auto &seq : cfg.sequences)
+            {
+                std::string path = hmm_gpu.viterbi(seq.data(),
+                                                   A_flat.data(),
+                                                   B_flat.data(),
+                                                   cfg.start_p.data(),
+                                                   static_cast<int>(seq.size()));
+                std::cout << path << std::endl;
+            }
         }
+        else if (problem == 3)
+        { // Baum-Welch
+            // training vectors (copies, as BW mutates them)
+            std::vector<float> A_train = A_flat;
+            std::vector<float> B_train = B_flat;
+            std::vector<float> pi_train = cfg.start_p;
+
+            if (cfg.sequences.empty())
+            {
+                std::cerr << "No sequences provided in configuration file." << std::endl;
+                return;
+            }
+
+            const std::vector<int> &obs = cfg.sequences[0]; // as per original behaviour
+            hmm_gpu.baum_welch(obs.data(),
+                               A_train.data(),
+                               B_train.data(),
+                               pi_train.data(),
+                               static_cast<int>(obs.size()),
+                               iterations,
+                               1e-5f);
+
+            // Print trained parameters in a format identical to the previous program
+            std::cout << std::fixed << std::setprecision(6);
+            for (int i = 0; i < cfg.N; ++i)
+            {
+                std::cout << pi_train[i] << (i == cfg.N - 1 ? "" : " ");
+            }
+            std::cout << std::endl;
+
+            for (int i = 0; i < cfg.N; ++i)
+            {
+                for (int j = 0; j < cfg.N; ++j)
+                {
+                    std::cout << A_train[i * cfg.N + j]
+                              << (j == cfg.N - 1 ? "" : " ");
+                }
+                std::cout << std::endl;
+            }
+
+            for (int i = 0; i < cfg.N; ++i)
+            {
+                for (int j = 0; j < cfg.M; ++j)
+                {
+                    std::cout << B_train[i * cfg.M + j]
+                              << (j == cfg.M - 1 ? "" : " ");
+                }
+                std::cout << std::endl;
+            }
+        }
+        else
+        {
+            std::cerr << "Selected problem not implemented on GPU path in this driver." << std::endl;
+        }
+        return;
     }
 
-    // Process each sequence
-    for (const auto &sequence : config.sequences)
-    {
-        float *obs = new float[sequence.size()];
-        for (size_t i = 0; i < sequence.size(); i++)
-        {
-            obs[i] = static_cast<float>(sequence[i]);
-        }
-
-        std::string path = hmm.viterbi(obs, nullptr, start_p, trans_p, emit_p,
-                                       sequence.size(), config.N, config.M);
-
-        std::cout << path << std::endl;
-
-        delete[] obs;
-    }
-
-    delete[] start_p;
-    delete[] trans_p;
-    delete[] emit_p;
+    // invalid impl
+    std::cerr << "Unknown implementation string (expected 'cpu' or 'gpu')." << std::endl;
 }
 
-void runBaumWelchAlgorithm(const HMMConfig &config, int iterations)
+// -----------------------------------------------------------------------------
+// CLI helpers
+// -----------------------------------------------------------------------------
+static void printUsage(const char *prog)
 {
-    IHMM hmm(config.N, config.M);
-
-    // Convert data structures to arrays
-    float *start_p = new float[config.N];
-    float *trans_p = new float[config.N * config.N];
-    float *emit_p = new float[config.N * config.M];
-
-    for (int i = 0; i < config.N; i++)
-    {
-        start_p[i] = config.start_p[i];
-    }
-
-    for (int i = 0; i < config.N; i++)
-    {
-        for (int j = 0; j < config.N; j++)
-        {
-            trans_p[i * config.N + j] = config.trans_p[i][j];
-        }
-    }
-
-    for (int i = 0; i < config.N; i++)
-    {
-        for (int j = 0; j < config.M; j++)
-        {
-            emit_p[i * config.M + j] = config.emit_p[i][j];
-        }
-    }
-
-    // Train on all sequences (using first sequence for now - you may want to modify this)
-    if (!config.sequences.empty())
-    {
-        float *obs = new float[config.sequences[0].size()];
-        for (size_t i = 0; i < config.sequences[0].size(); i++)
-        {
-            obs[i] = static_cast<float>(config.sequences[0][i]);
-        }
-
-        hmm.baum_welch(obs, nullptr, start_p, trans_p, emit_p,
-                       config.sequences[0].size(), config.N, config.M, iterations);
-
-        delete[] obs;
-    }
-
-    // Output trained parameters
-    // Initial probabilities
-    for (int i = 0; i < config.N; i++)
-    {
-        std::cout << std::fixed << std::setprecision(6) << start_p[i];
-        if (i < config.N - 1)
-            std::cout << " ";
-    }
-    std::cout << std::endl;
-
-    // Transition matrix
-    for (int i = 0; i < config.N; i++)
-    {
-        for (int j = 0; j < config.N; j++)
-        {
-            std::cout << std::fixed << std::setprecision(6) << trans_p[i * config.N + j];
-            if (j < config.N - 1)
-                std::cout << " ";
-        }
-        std::cout << std::endl;
-    }
-
-    // Emission matrix
-    for (int i = 0; i < config.N; i++)
-    {
-        for (int j = 0; j < config.M; j++)
-        {
-            std::cout << std::fixed << std::setprecision(6) << emit_p[i * config.M + j];
-            if (j < config.M - 1)
-                std::cout << " ";
-        }
-        std::cout << std::endl;
-    }
-
-    delete[] start_p;
-    delete[] trans_p;
-    delete[] emit_p;
-}
-
-void runBackwardAlgorithm(const HMMConfig &config)
-{
-    IHMM hmm(config.N, config.M);
-
-    // Convert data structures to arrays
-    float *start_p = new float[config.N];
-    float *trans_p = new float[config.N * config.N];
-    float *emit_p = new float[config.N * config.M];
-
-    for (int i = 0; i < config.N; i++)
-    {
-        start_p[i] = config.start_p[i];
-    }
-
-    for (int i = 0; i < config.N; i++)
-    {
-        for (int j = 0; j < config.N; j++)
-        {
-            trans_p[i * config.N + j] = config.trans_p[i][j];
-        }
-    }
-
-    for (int i = 0; i < config.N; i++)
-    {
-        for (int j = 0; j < config.M; j++)
-        {
-            emit_p[i * config.M + j] = config.emit_p[i][j];
-        }
-    }
-
-    // Process each sequence
-    for (const auto &sequence : config.sequences)
-    {
-        float *obs = new float[sequence.size()];
-        for (size_t i = 0; i < sequence.size(); i++)
-        {
-            obs[i] = static_cast<float>(sequence[i]);
-        }
-
-        float **betas = hmm.backward(obs, nullptr, start_p, trans_p, emit_p,
-                                     sequence.size(), config.N, config.M);
-
-        // Calculate total probability using backward algorithm
-        // P(observations) = sum over all states i of: P(start_i) * P(obs[0]|state_i) * beta[1][i]
-        float total_prob = 0.0f;
-        for (int i = 0; i < config.N; i++)
-        {
-            total_prob += start_p[i] * emit_p[i * config.M + static_cast<int>(obs[0])] * betas[1][i];
-        }
-
-        std::cout << std::scientific << std::setprecision(6) << total_prob << std::endl;
-
-        // Clean up betas
-        for (size_t t = 0; t <= sequence.size(); t++)
-        {
-            delete[] betas[t];
-        }
-        delete[] betas;
-        delete[] obs;
-    }
-
-    delete[] start_p;
-    delete[] trans_p;
-    delete[] emit_p;
-}
-
-void printUsage(const char *program_name)
-{
-    std::cout << "Usage: " << program_name << " -c <config_file> -p<problem> [-n <iterations>]" << std::endl;
-    std::cout << "  -c <config_file>: Path to HMM configuration file" << std::endl;
-    std::cout << "  -p1: Forward algorithm (compute probabilities)" << std::endl;
-    std::cout << "  -p2: Viterbi algorithm (find most probable sequences)" << std::endl;
-    std::cout << "  -p3: Baum-Welch algorithm (train parameters)" << std::endl;
-    std::cout << "  -p4: Backward algorithm (compute probabilities)" << std::endl;
-    std::cout << "  -n <iterations>: Number of iterations for Baum-Welch (default: 100)" << std::endl;
+    std::cout << "Usage: " << prog
+              << " --impl <cpu|gpu> -c <config_file> -p<problem> [-n <iterations>]" << std::endl;
+    std::cout << "  -p1: Forward (not implemented in this driver)" << std::endl;
+    std::cout << "  -p2: Viterbi" << std::endl;
+    std::cout << "  -p3: Baum-Welch" << std::endl;
+    std::cout << "  -p4: Backward (not implemented in this driver)" << std::endl;
 }
 
 int main(int argc, char *argv[])
 {
-    std::string config_file;
+    std::string impl = "cpu";
+    std::string cfg_file;
     int problem = 0;
     int iterations = 100;
 
-    // Parse command line arguments
-    for (int i = 1; i < argc; i++)
+    for (int i = 1; i < argc; ++i)
     {
-        if (std::strcmp(argv[i], "-c") == 0 && i + 1 < argc)
+        std::string arg(argv[i]);
+        if (arg == "--impl" && i + 1 < argc)
         {
-            config_file = argv[++i];
+            impl = argv[++i];
         }
-        else if (std::strncmp(argv[i], "-p", 2) == 0)
+        else if (arg == "-c" && i + 1 < argc)
         {
-            problem = std::atoi(argv[i] + 2);
+            cfg_file = argv[++i];
         }
-        else if (std::strcmp(argv[i], "-n") == 0 && i + 1 < argc)
+        else if (arg.rfind("-p", 0) == 0)
         {
-            iterations = std::atoi(argv[++i]);
+            problem = std::stoi(arg.substr(2));
         }
-        else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0)
+        else if (arg == "-n" && i + 1 < argc)
+        {
+            iterations = std::stoi(argv[++i]);
+        }
+        else if (arg == "--help" || arg == "-h")
         {
             printUsage(argv[0]);
             return 0;
         }
     }
 
-    if (config_file.empty() || problem == 0)
+    if (cfg_file.empty() || problem == 0 || (impl != "cpu" && impl != "gpu"))
     {
         printUsage(argv[0]);
         return 1;
@@ -424,32 +335,13 @@ int main(int argc, char *argv[])
 
     try
     {
-        HMMConfig config = parseConfigFile(config_file);
-
-        switch (problem)
-        {
-        case 1:
-            runForwardAlgorithm(config);
-            break;
-        case 2:
-            runViterbiAlgorithm(config);
-            break;
-        case 3:
-            runBaumWelchAlgorithm(config, iterations);
-            break;
-        case 4:
-            runBackwardAlgorithm(config);
-            break;
-        default:
-            std::cerr << "Invalid problem number. Use 1, 2, 3, or 4." << std::endl;
-            return 1;
-        }
+        HMMConfig cfg = parseConfigFile(cfg_file);
+        run(cfg, problem, iterations, impl);
     }
     catch (const std::exception &e)
     {
         std::cerr << "Error: " << e.what() << std::endl;
         return 1;
     }
-
     return 0;
 }

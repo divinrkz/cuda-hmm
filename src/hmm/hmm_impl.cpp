@@ -28,18 +28,6 @@ float **IHMM::forward(float *obs, int *states, float *start_p, float *trans_p, f
 {
     auto start = std::chrono::high_resolution_clock::now();
 
-    // CUDA PARALLELIZATION STRATEGY FOR FORWARD ALGORITHM:
-    // 1. TRELLIS PARALLELIZATION: Create a T×N trellis (matrix) where each cell α(t,i) represents
-    //    the probability of being in state i at time t. Each time step depends on the previous one,
-    //    but within each time step, all states can be computed in parallel.
-    //
-    // 2. THREAD MAPPING: Launch N threads per time step, where each thread computes one state:
-    //    - threadIdx.x = state_index (0 to N-1)
-    //    - blockIdx.x = time_step (2 to T, since step 1 is initialization)
-    //
-    // 3. PARALLEL REDUCTION: The inner loop (summing over previous states) can use
-    //    parallel reduction to compute the sum more efficiently than sequential addition
-
     // Create and initialize alphas (T+1 x N matrix)
     float **alphas = new float *[T + 1];
     for (int t = 0; t <= T; t++)
