@@ -28,8 +28,6 @@ float **IHMM::forward(float *obs, int *states, float *start_p, float *trans_p, f
 {
     auto start = std::chrono::high_resolution_clock::now();
 
-
-
     // Create and initialize alphas (T+1 x N matrix)
     float **alphas = new float *[T + 1];
     for (int t = 0; t <= T; t++)
