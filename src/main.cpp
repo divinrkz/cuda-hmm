@@ -285,16 +285,7 @@ static void run(const HMMConfig &cfg, int problem, int iterations,
                 return;
             }
 
-
             const std::vector<int> &obs = cfg.sequences[0]; // as per original behaviour
-            std::cout << "obs: " << obs.size() << std::endl;
-            std::cout << "A_train: " << A_train.size() << std::endl;
-            std::cout << "B_train: " << B_train.size() << std::endl;
-            std::cout << "pi_train: " << pi_train.size() << std::endl;
-            std::cout << "iterations: " << iterations << std::endl;
-            std::cout << "tolerance: " << 1e-5f << std::endl;
-            std::cout << "cfg.N: " << cfg.N << std::endl;
-            std::cout << "cfg.M: " << cfg.M << std::endl;
             hmm_gpu.baum_welch(obs.data(),
                                A_train.data(),
                                B_train.data(),
