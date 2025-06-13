@@ -122,6 +122,26 @@ static void run(const HMMConfig &cfg, int problem, int iterations,
 
         switch (problem)
         {
+        case 1: // Forward
+            for (const auto &seq : cfg.sequences)
+            {
+                std::vector<float> obs_f(seq.begin(), seq.end());
+                float **alphas = hmm_cpu.forward(obs_f.data(), nullptr, const_cast<float *>(cfg.start_p.data()), A_flat.data(), B_flat.data(),
+                                                 static_cast<int>(seq.size()), cfg.N, cfg.M);
+                float total_prob = 0.0f;
+                for (int i = 0; i < cfg.N; i++)
+                {
+                    total_prob += alphas[seq.size()][i];
+                }
+                std::cout << std::scientific << std::setprecision(6) << total_prob << std::endl;
+
+                for (size_t t = 0; t <= seq.size(); t++)
+                {
+                    delete[] alphas[t];
+                }
+                delete[] alphas;
+            }
+            break;
         case 2: // Viterbi
             for (const auto &seq : cfg.sequences)
             {
@@ -192,6 +212,27 @@ static void run(const HMMConfig &cfg, int problem, int iterations,
             }
             break;
         }
+        case 4: // Backward
+            for (const auto &seq : cfg.sequences)
+            {
+                std::vector<float> obs_f(seq.begin(), seq.end());
+                float **betas = hmm_cpu.backward(obs_f.data(), nullptr, const_cast<float *>(cfg.start_p.data()), A_flat.data(), B_flat.data(),
+                                                 static_cast<int>(seq.size()), cfg.N, cfg.M);
+
+                float total_prob = 0.0f;
+                for (int i = 0; i < cfg.N; i++)
+                {
+                    total_prob += cfg.start_p[i] * B_flat[i * cfg.M + static_cast<int>(obs_f[0])] * betas[1][i];
+                }
+                std::cout << std::scientific << std::setprecision(6) << total_prob << std::endl;
+
+                for (size_t t = 0; t <= seq.size(); t++)
+                {
+                    delete[] betas[t];
+                }
+                delete[] betas;
+            }
+            break;
         default:
             std::cerr << "Selected problem not supported on CPU path in this driver." << std::endl;
             break;
@@ -208,7 +249,15 @@ static void run(const HMMConfig &cfg, int problem, int iterations,
 
         HMM_GPU hmm_gpu(cfg.N, cfg.M, max_T);
 
-        if (problem == 2)
+        if (problem == 1)
+        {
+            for (const auto &seq : cfg.sequences)
+            {
+                float prob = hmm_gpu.forward(seq.data(), A_flat.data(), B_flat.data(), cfg.start_p.data(), static_cast<int>(seq.size()));
+                std::cout << std::scientific << std::setprecision(6) << prob << std::endl;
+            }
+        }
+        else if (problem == 2)
         { // Viterbi
             for (const auto &seq : cfg.sequences)
             {
@@ -270,6 +319,14 @@ static void run(const HMMConfig &cfg, int problem, int iterations,
                 std::cout << std::endl;
             }
         }
+        else if (problem == 4)
+        {
+            for (const auto &seq : cfg.sequences)
+            {
+                float prob = hmm_gpu.backward(seq.data(), A_flat.data(), B_flat.data(), cfg.start_p.data(), static_cast<int>(seq.size()));
+                std::cout << std::scientific << std::setprecision(6) << prob << std::endl;
+            }
+        }
         else
         {
             std::cerr << "Selected problem not implemented on GPU path in this driver." << std::endl;
@@ -288,10 +345,10 @@ static void printUsage(const char *prog)
 {
     std::cout << "Usage: " << prog
               << " --impl <cpu|gpu> -c <config_file> -p<problem> [-n <iterations>]" << std::endl;
-    std::cout << "  -p1: Forward (not implemented in this driver)" << std::endl;
+    std::cout << "  -p1: Forward" << std::endl;
     std::cout << "  -p2: Viterbi" << std::endl;
     std::cout << "  -p3: Baum-Welch" << std::endl;
-    std::cout << "  -p4: Backward (not implemented in this driver)" << std::endl;
+    std::cout << "  -p4: Backward" << std::endl;
 }
 
 int main(int argc, char *argv[])

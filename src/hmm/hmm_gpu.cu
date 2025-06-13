@@ -1,160 +1,125 @@
+// File: hmm_gpu.cu
 #include "hmm_gpu.cuh"
 #include <iostream>
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
-#include <algorithm> // For std::swap
-#include <limits>    // For std::numeric_limits
-#include <cmath>     // For logf, fabsf
+#include <cublas_v2.h>
+#include <vector>
+#include <numeric>
+#include <cmath>
 #include <sstream>
 
-// Simple CUDA error checking macro
-#define CHECK_CUDA_ERROR(err) \
-    if (err != cudaSuccess) { \
+// --- CUDA/CUBLAS Error Checking ---
+#define CHECK_CUDA_ERROR(err)                                                                              \
+    if (err != cudaSuccess)                                                                                \
+    {                                                                                                      \
         fprintf(stderr, "CUDA error in %s at line %d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); \
-        exit(EXIT_FAILURE); \
+        exit(EXIT_FAILURE);                                                                                \
+    }
+
+const char *cublasGetErrorString(cublasStatus_t status)
+{
+    switch (status)
+    {
+    case CUBLAS_STATUS_SUCCESS:
+        return "CUBLAS_STATUS_SUCCESS";
+    case CUBLAS_STATUS_NOT_INITIALIZED:
+        return "CUBLAS_STATUS_NOT_INITIALIZED";
+    case CUBLAS_STATUS_ALLOC_FAILED:
+        return "CUBLAS_STATUS_ALLOC_FAILED";
+    case CUBLAS_STATUS_INVALID_VALUE:
+        return "CUBLAS_STATUS_INVALID_VALUE";
+    case CUBLAS_STATUS_ARCH_MISMATCH:
+        return "CUBLAS_STATUS_ARCH_MISMATCH";
+    case CUBLAS_STATUS_MAPPING_ERROR:
+        return "CUBLAS_STATUS_MAPPING_ERROR";
+    case CUBLAS_STATUS_EXECUTION_FAILED:
+        return "CUBLAS_STATUS_EXECUTION_FAILED";
+    case CUBLAS_STATUS_INTERNAL_ERROR:
+        return "CUBLAS_STATUS_INTERNAL_ERROR";
+    case CUBLAS_STATUS_NOT_SUPPORTED:
+        return "CUBLAS_STATUS_NOT_SUPPORTED";
+    case CUBLAS_STATUS_LICENSE_ERROR:
+        return "CUBLAS_STATUS_LICENSE_ERROR";
+    }
+    return "Unknown cuBLAS error";
+}
+
+#define CHECK_CUBLAS_ERROR(err)                                                                                \
+    if (err != CUBLAS_STATUS_SUCCESS)                                                                          \
+    {                                                                                                          \
+        fprintf(stderr, "cuBLAS error in %s at line %d: %s\n", __FILE__, __LINE__, cublasGetErrorString(err)); \
+        exit(EXIT_FAILURE);                                                                                    \
     }
 
 // ========================================================================== //
-//                              FORWARD/BACKWARD KERNELS                      //
+//                                KERNELS                                     //
 // ========================================================================== //
 
-// Kernel: Prepares input matrices for the forward scan. M_t[i,j] = A[i,j] * B[j, obs[t]]
-__global__ void kernel_prepare_forward_scan(float* d_M, const float* d_A, const float* d_B, const int* d_obs, int N, int M, int T) {
+__global__ void kernel_init_alpha_unscaled(float *d_alpha, const float *d_pi, const float *d_B, int obs0, int N, int M)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < N)
+    {
+        d_alpha[i] = d_pi[i] * d_B[i * M + obs0];
+    }
+}
+
+__global__ void kernel_update_alpha_emission(float *d_alpha_t, const float *d_B, int obs_t, int N, int M)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < N)
+    {
+        d_alpha_t[i] *= d_B[i * M + obs_t];
+    }
+}
+
+__global__ void kernel_init_beta_unscaled(float *d_beta_T, int N)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < N)
+    {
+        d_beta_T[i] = 1.0f;
+    }
+}
+
+__global__ void kernel_update_beta_emission(float *d_beta_t1, const float *d_B, int obs_t1, int N, int M)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < N)
+    {
+        d_beta_t1[i] *= d_B[i * M + obs_t1];
+    }
+}
+
+__global__ void kernel_compute_gamma_xi(float *d_gamma, float *d_xi,
+                                        const float *d_alpha, const float *d_beta, const float *d_A,
+                                        const float *d_B, const int *d_obs, int N, int M, int T)
+{
     int t = blockIdx.x;
-    int i = blockIdx.y;
-    int j = threadIdx.x;
+    if (t >= T - 1)
+        return;
 
-    if (t < T && i < N && j < N) {
-        int obs_t = d_obs[t];
-        d_M[(t * N + i) * N + j] = d_A[i * N + j] * d_B[j * M + obs_t];
-    }
-}
-
-// Kernel: Generic matrix-matrix multiplication (C = A * B). The core of the forward scan.
-__global__ void kernel_matrix_mult(float* C, const float* A, const float* B, int N) {
-    int row = blockIdx.y * blockDim.y + threadIdx.y;
-    int col = blockIdx.x * blockDim.x + threadIdx.x;
-
-    if (row < N && col < N) {
-        float sum = 0.0f;
-        for (int k = 0; k < N; ++k) {
-            sum += A[row * N + k] * B[k * N + col];
-        }
-        C[row * N + col] = sum;
-    }
-}
-
-// Kernel: Finalizes alpha values. alpha[t] = pi^T * P_t and computes scaling factors.
-__global__ void kernel_finalize_alpha(float* d_alpha, const float* d_pi, const float* d_P, int N, int T) {
-    int t = blockIdx.x;
-    int j = threadIdx.x;
-
-    if (t < T && j < N) {
-        float sum = 0.0f;
-        for (int i = 0; i < N; ++i) {
-            sum += d_pi[i] * d_P[(t * N + i) * N + j];
-        }
-        d_alpha[t * N + j] = sum;
-    }
-}
-
-// Kernel: Prepares input matrices for the backward scan (transposed logic). M_t[i,j] = A[j,i] * B[i, obs[t+1]]
-__global__ void kernel_prepare_backward_scan(float* d_M, const float* d_A, const float* d_B, const int* d_obs, int N, int M, int T) {
-    int t = blockIdx.x; // t goes from 0 to T-2
-    int i = blockIdx.y;
-    int j = threadIdx.x;
-
-    if (t < T - 1 && i < N && j < N) {
-        int obs_t1 = d_obs[t + 1];
-        // Note: A is transposed here: A[j,i]
-        d_M[(t * N + i) * N + j] = d_A[j * N + i] * d_B[i * M + obs_t1];
-    }
-}
-
-// ========================================================================== //
-//                                VITERBI KERNELS                             //
-// ========================================================================== //
-
-// Kernel: Prepares input matrices for Viterbi scan. M_t[i,j] = log(A[i,j]) + log(B[j, obs[t]])
-__global__ void kernel_prepare_viterbi_scan(float* d_M, const float* d_A, const float* d_B, const int* d_obs, int N, int M, int T) {
-    int t = blockIdx.x;
-    int i = blockIdx.y;
-    int j = threadIdx.x;
-
-    if (t < T && i < N && j < N) {
-        int obs_t = d_obs[t];
-        float log_a = logf(d_A[i * N + j]);
-        float log_b = logf(d_B[j * M + obs_t]);
-        // Viterbi runs in log-space to prevent underflow
-        d_M[(t * N + i) * N + j] = log_a + log_b;
-    }
-}
-
-// Kernel: Max-Plus matrix multiplication for Viterbi (log-space). C[i,j] = max_k(A[i,k] + B[k,j])
-__global__ void kernel_max_plus_mult(float* C, int* Path, const float* A, const float* B, int N) {
-    int row = blockIdx.y * blockDim.y + threadIdx.y;
-    int col = blockIdx.x * blockDim.x + threadIdx.x;
-
-    if (row < N && col < N) {
-        float max_val = -std::numeric_limits<float>::infinity();
-        int max_k = -1;
-        for (int k = 0; k < N; ++k) {
-            float val = A[row * N + k] + B[k * N + col];
-            if (val > max_val) {
-                max_val = val;
-                max_k = k;
-            }
-        }
-        C[row * N + col] = max_val;
-        if (Path) Path[row * N + col] = max_k;
-    }
-}
-
-// ========================================================================== //
-//                     BAUM-WELCH (GAMMA, XI, M-STEP) KERNELS                 //
-// ========================================================================== //
-
-// Kernel: Computes log-likelihood from alpha scaling factors.
-__global__ void kernel_compute_log_likelihood(float* d_logL, const float* d_alpha, int N, int T) {
-    extern __shared__ float sdata[];
-    int i = threadIdx.x;
-
-    sdata[i] = (i < N) ? d_alpha[(T - 1) * N + i] : 0.0f;
-    __syncthreads();
-
-    for (unsigned int s = blockDim.x / 2; s > 0; s >>= 1) {
-        if (i < s) sdata[i] += sdata[i + s];
-        __syncthreads();
-    }
-    if (i == 0) *d_logL = logf(sdata[0]);
-}
-
-// Kernel: Computes gamma and xi values.
-__global__ void kernel_compute_gamma_xi(float* d_gamma, float* d_xi, const float* d_alpha, const float* d_beta, const float* d_A, const float* d_B, const int* d_obs, int N, int M, int T) {
-    int t = blockIdx.x;
-    if (t >= T - 1) return;
-
-    // First, compute the denominator for this time step t
-    extern __shared__ float s_denom[];
-    if (threadIdx.x == 0) s_denom[0] = 0.0f;
-    __syncthreads();
-
-    float local_denom = 0.0f;
-    for (int i = threadIdx.x; i < N; i += blockDim.x) {
-        for (int j = 0; j < N; ++j) {
-            local_denom += d_alpha[t*N+i] * d_A[i*N+j] * d_B[j*M+d_obs[t+1]] * d_beta[(t+1)*N+j];
+    // This kernel now uses a 1D block. We need to calculate the denominator first.
+    // This is less efficient than the previous shared memory approach but safer across all problem sizes.
+    // A full high-performance version would use a block-level reduction here.
+    float denom = 0.0f;
+    for (int i_denom = 0; i_denom < N; ++i_denom)
+    {
+        for (int j_denom = 0; j_denom < N; ++j_denom)
+        {
+            denom += d_alpha[t * N + i_denom] * d_A[i_denom * N + j_denom] * d_B[j_denom * M + d_obs[t + 1]] * d_beta[(t + 1) * N + j_denom];
         }
     }
-    atomicAdd(&s_denom[0], local_denom);
-    __syncthreads();
-    
-    float denom = s_denom[0];
-    if (denom == 0.0f) return;
+    if (denom < 1e-35f)
+        return;
 
-    // Now compute gamma and xi for all states
-    for (int i = threadIdx.x; i < N; i += blockDim.x) {
+    // Grid-stride loop for i
+    for (int i = threadIdx.x; i < N; i += blockDim.x)
+    {
         float gamma_val = 0.0f;
-        for (int j = 0; j < N; ++j) {
+        for (int j = 0; j < N; ++j)
+        {
             float xi_val = (d_alpha[t * N + i] * d_A[i * N + j] * d_B[j * M + d_obs[t + 1]] * d_beta[(t + 1) * N + j]) / denom;
             d_xi[(t * N + i) * N + j] = xi_val;
             gamma_val += xi_val;
@@ -163,46 +128,109 @@ __global__ void kernel_compute_gamma_xi(float* d_gamma, float* d_xi, const float
     }
 }
 
-// Kernel: M-Step - updates pi, A, and B.
-__global__ void kernel_m_step(float* d_pi, float* d_A, float* d_B, const float* d_gamma, const float* d_xi, const int* d_obs, int N, int M, int T) {
+__global__ void kernel_compute_last_gamma(float *d_gamma, const float *d_alpha, int N, int T)
+{
+    // In an unscaled implementation, gamma at T-1 is just the normalized alpha at T-1.
+    float denom = 0.0f;
+    for (int i = 0; i < N; ++i)
+    {
+        denom += d_alpha[(T - 1) * N + i];
+    }
+    if (denom == 0.0f)
+        return;
+
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < N)
+    {
+        d_gamma[(T - 1) * N + i] = d_alpha[(T - 1) * N + i] / denom;
+    }
+}
+
+__global__ void kernel_viterbi_init(float *d_v, const float *d_pi, const float *d_B, int obs0, int N, int M)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < N)
+    {
+        d_v[i] = d_pi[i] * d_B[i * M + obs0];
+    }
+}
+
+__global__ void kernel_viterbi_step(float *d_v_curr, int *d_path_curr, const float *d_v_prev,
+                                    const float *d_A, const float *d_B, int obs_t, int N, int M)
+{
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    if (j < N)
+    {
+        float max_prob = 0.0f;
+        int best_path_idx = -1;
+
+        for (int i = 0; i < N; ++i)
+        {
+            float prob = d_v_prev[i] * d_A[i * N + j];
+            if (prob > max_prob)
+            {
+                max_prob = prob;
+                best_path_idx = i;
+            }
+        }
+
+        d_v_curr[j] = max_prob * d_B[j * M + obs_t];
+        d_path_curr[j] = best_path_idx;
+    }
+}
+
+__global__ void kernel_m_step(float *d_pi, float *d_A, float *d_B, const float *d_gamma, const float *d_xi, const int *d_obs, int N, int M, int T)
+{
     int i = blockIdx.x;
-    if (i >= N) return;
-    
-    // Update pi
+    if (i >= N)
+        return;
+
     d_pi[i] = d_gamma[i];
 
-    // Update A
-    float gamma_sum_i = 0.0f;
-    for (int t = 0; t < T - 1; ++t) gamma_sum_i += d_gamma[t * N + i];
-    
-    if (gamma_sum_i > 0) {
-        for (int j = threadIdx.x; j < N; j += blockDim.x) {
-            float xi_sum_ij = 0.0f;
-            for (int t = 0; t < T - 1; ++t) xi_sum_ij += d_xi[(t * N + i) * N + j];
-            d_A[i * N + j] = xi_sum_ij / gamma_sum_i;
+    float gamma_sum_A = 0.0f;
+    for (int t = 0; t < T - 1; ++t)
+    {
+        gamma_sum_A += d_gamma[t * N + i];
+    }
+
+    if (gamma_sum_A > 1e-9)
+    {
+        for (int j = threadIdx.x; j < N; j += blockDim.x)
+        {
+            float xi_sum = 0.0f;
+            for (int t = 0; t < T - 1; ++t)
+            {
+                xi_sum += d_xi[(t * N + i) * N + j];
+            }
+            d_A[i * N + j] = xi_sum / gamma_sum_A;
         }
     }
 
-    // Update B
-    gamma_sum_i += d_gamma[(T-1)*N+i]; // Add last gamma for B denom
-    if (gamma_sum_i > 0) {
-        for (int k = threadIdx.x; k < M; k += blockDim.x) {
+    float gamma_sum_B = gamma_sum_A + d_gamma[(T - 1) * N + i];
+    if (gamma_sum_B > 1e-9)
+    {
+        for (int k = threadIdx.x; k < M; k += blockDim.x)
+        {
             float numer = 0.0f;
-            for (int t = 0; t < T; ++t) {
-                if (d_obs[t] == k) numer += d_gamma[t * N + i];
+            for (int t = 0; t < T; ++t)
+            {
+                if (d_obs[t] == k)
+                {
+                    numer += d_gamma[t * N + i];
+                }
             }
-            d_B[i * M + k] = numer / gamma_sum_i;
+            d_B[i * M + k] = numer / gamma_sum_B;
         }
     }
 }
 
 // ========================================================================== //
-//                            CLASS MEMBER FUNCTIONS                          //
+//                    CLASS MEMBER IMPLEMENTATIONS
 // ========================================================================== //
 
 HMM_GPU::HMM_GPU(int num_states, int num_obs_symbols, int max_seq_len)
-    : N(num_states), M(num_obs_symbols), max_T(max_seq_len) {
-    // Allocate all necessary memory once
+    : N(num_states), M(num_obs_symbols), max_T(max_seq_len)
+{
     CHECK_CUDA_ERROR(cudaMalloc(&d_A, N * N * sizeof(float)));
     CHECK_CUDA_ERROR(cudaMalloc(&d_B, N * M * sizeof(float)));
     CHECK_CUDA_ERROR(cudaMalloc(&d_pi, N * sizeof(float)));
@@ -211,118 +239,200 @@ HMM_GPU::HMM_GPU(int num_states, int num_obs_symbols, int max_seq_len)
     CHECK_CUDA_ERROR(cudaMalloc(&d_beta, max_T * N * sizeof(float)));
     CHECK_CUDA_ERROR(cudaMalloc(&d_gamma, max_T * N * sizeof(float)));
     CHECK_CUDA_ERROR(cudaMalloc(&d_xi, (max_T - 1) * N * N * sizeof(float)));
-    CHECK_CUDA_ERROR(cudaMalloc(&d_log_likelihood, sizeof(float)));
+    CHECK_CUDA_ERROR(cudaMalloc(&d_temp_vec, N * sizeof(float)));
     CHECK_CUDA_ERROR(cudaMalloc(&d_viterbi_probs, max_T * N * sizeof(float)));
     CHECK_CUDA_ERROR(cudaMalloc(&d_viterbi_paths, max_T * N * sizeof(int)));
-    CHECK_CUDA_ERROR(cudaMalloc(&d_scan_M, max_T * N * N * sizeof(float)));
-    CHECK_CUDA_ERROR(cudaMalloc(&d_scan_P, max_T * N * N * sizeof(float)));
-    CHECK_CUDA_ERROR(cudaMalloc(&d_scan_temp, max_T * N * N * sizeof(float)));
+    CHECK_CUBLAS_ERROR(cublasCreate(&cublas_handle));
 }
 
-HMM_GPU::~HMM_GPU() {
-    cudaFree(d_A); cudaFree(d_B); cudaFree(d_pi);
-    cudaFree(d_obs); cudaFree(d_alpha); cudaFree(d_beta);
-    cudaFree(d_gamma); cudaFree(d_xi); cudaFree(d_log_likelihood);
-    cudaFree(d_viterbi_probs); cudaFree(d_viterbi_paths);
-    cudaFree(d_scan_M); cudaFree(d_scan_P); cudaFree(d_scan_temp);
+HMM_GPU::~HMM_GPU()
+{
+    cudaFree(d_A);
+    cudaFree(d_B);
+    cudaFree(d_pi);
+    cudaFree(d_obs);
+    cudaFree(d_alpha);
+    cudaFree(d_beta);
+    cudaFree(d_gamma);
+    cudaFree(d_xi);
+    cudaFree(d_temp_vec);
+    cudaFree(d_viterbi_probs);
+    cudaFree(d_viterbi_paths);
+    CHECK_CUBLAS_ERROR(cublasDestroy(cublas_handle));
 }
 
-// --- High-level algorithm implementations ---
+void HMM_GPU::run_forward_pass(int T)
+{
+    const float alpha_blas = 1.0f;
+    const float beta_blas = 0.0f;
+    std::vector<int> h_obs(T);
+    CHECK_CUDA_ERROR(cudaMemcpy(h_obs.data(), d_obs, T * sizeof(int), cudaMemcpyDeviceToHost));
 
-void HMM_GPU::run_forward_pass_scan(int T) {
-    // 1. Prepare scan inputs
-    kernel_prepare_forward_scan<<<dim3(T, N), N>>>(d_scan_M, d_A, d_B, d_obs, N, M, T);
+    kernel_init_alpha_unscaled<<<(N + 255) / 256, 256>>>(d_alpha, d_pi, d_B, h_obs[0], N, M);
     CHECK_CUDA_ERROR(cudaGetLastError());
 
-    // 2. Perform parallel scan (simplified host-driven version for clarity)
-    CHECK_CUDA_ERROR(cudaMemcpy(d_scan_P, d_scan_M, T * N * N * sizeof(float), cudaMemcpyDeviceToDevice));
-    
-    float* d_in = d_scan_P;
-    float* d_out = d_scan_temp;
-
-    for (int stride = 1; stride < T; stride *= 2) {
-        for (int t_idx = 0; t_idx < T; t_idx += 2 * stride) {
-             if (t_idx + 2*stride - 1 < T) {
-                 kernel_matrix_mult<<<dim3((N+15)/16, (N+15)/16), dim3(16,16)>>>(
-                     &d_out[(t_idx + 2*stride -1)*N*N], &d_in[(t_idx+stride-1)*N*N], &d_in[(t_idx+2*stride-1)*N*N], N);
-             }
-        }
-        std::swap(d_in, d_out);
+    for (int t = 1; t < T; ++t)
+    {
+        float *d_alpha_prev = &d_alpha[(t - 1) * N];
+        float *d_alpha_curr = &d_alpha[t * N];
+        CHECK_CUBLAS_ERROR(cublasSgemv(cublas_handle, CUBLAS_OP_T, N, N, &alpha_blas, d_A, N, d_alpha_prev, 1, &beta_blas, d_alpha_curr, 1));
+        kernel_update_alpha_emission<<<(N + 255) / 256, 256>>>(d_alpha_curr, d_B, h_obs[t], N, M);
     }
-    //... (A full scan is more complex, this is illustrative)
+}
 
-    // 3. Finalize alpha
-    kernel_finalize_alpha<<<T, N>>>(d_alpha, d_pi, d_in, N, T);
+void HMM_GPU::run_backward_pass(int T)
+{
+    const float alpha_blas = 1.0f;
+    const float beta_blas = 0.0f;
+    std::vector<int> h_obs(T);
+    CHECK_CUDA_ERROR(cudaMemcpy(h_obs.data(), d_obs, T * sizeof(int), cudaMemcpyDeviceToHost));
+
+    kernel_init_beta_unscaled<<<(N + 255) / 256, 256>>>(&d_beta[(T - 1) * N], N);
     CHECK_CUDA_ERROR(cudaGetLastError());
+
+    for (int t = T - 2; t >= 0; --t)
+    {
+        float *d_beta_prev = &d_beta[(t + 1) * N];
+        float *d_beta_curr = &d_beta[t * N];
+        CHECK_CUDA_ERROR(cudaMemcpy(d_temp_vec, d_beta_prev, N * sizeof(float), cudaMemcpyDeviceToDevice));
+        kernel_update_beta_emission<<<(N + 255) / 256, 256>>>(d_temp_vec, d_B, h_obs[t + 1], N, M);
+        CHECK_CUBLAS_ERROR(cublasSgemv(cublas_handle, CUBLAS_OP_N, N, N, &alpha_blas, d_A, N, d_temp_vec, 1, &beta_blas, d_beta_curr, 1));
+    }
 }
 
-float HMM_GPU::forward(const int* h_obs, const float* h_A, const float* h_B, const float* h_pi, int T) {
-    // Copy inputs to device
+float HMM_GPU::forward(const int *h_obs, const float *h_A, const float *h_B, const float *h_pi, int T)
+{
     CHECK_CUDA_ERROR(cudaMemcpy(d_obs, h_obs, T * sizeof(int), cudaMemcpyHostToDevice));
     CHECK_CUDA_ERROR(cudaMemcpy(d_A, h_A, N * N * sizeof(float), cudaMemcpyHostToDevice));
     CHECK_CUDA_ERROR(cudaMemcpy(d_B, h_B, N * M * sizeof(float), cudaMemcpyHostToDevice));
     CHECK_CUDA_ERROR(cudaMemcpy(d_pi, h_pi, N * sizeof(float), cudaMemcpyHostToDevice));
 
-    run_forward_pass_scan(T);
-    
-    float h_log_likelihood;
-    kernel_compute_log_likelihood<<<1, N>>>(d_log_likelihood, d_alpha, N, T);
-    CHECK_CUDA_ERROR(cudaMemcpy(&h_log_likelihood, d_log_likelihood, sizeof(float), cudaMemcpyDeviceToHost));
-    
-    return h_log_likelihood;
+    run_forward_pass(T);
+
+    float total_prob = 0.0f;
+    CHECK_CUBLAS_ERROR(cublasSasum(cublas_handle, N, &d_alpha[(T - 1) * N], 1, &total_prob));
+    return total_prob;
 }
 
-std::string HMM_GPU::viterbi(const int* h_obs, const float* h_A, const float* h_B, const float* h_pi, int T) {
-    // Copy inputs to device
+float HMM_GPU::backward(const int *h_obs, const float *h_A, const float *h_B, const float *h_pi, int T)
+{
     CHECK_CUDA_ERROR(cudaMemcpy(d_obs, h_obs, T * sizeof(int), cudaMemcpyHostToDevice));
     CHECK_CUDA_ERROR(cudaMemcpy(d_A, h_A, N * N * sizeof(float), cudaMemcpyHostToDevice));
     CHECK_CUDA_ERROR(cudaMemcpy(d_B, h_B, N * M * sizeof(float), cudaMemcpyHostToDevice));
     CHECK_CUDA_ERROR(cudaMemcpy(d_pi, h_pi, N * sizeof(float), cudaMemcpyHostToDevice));
 
-    // A full Viterbi scan would be implemented here using kernel_max_plus_mult
-    // For brevity, this part is omitted but would follow the scan logic.
-    // The result would be a final probability vector and a path matrix.
-    
-    // Backtracking would happen on the host after copying back the path matrix
-    std::vector<int> h_path(T);
-    // ... backtracking logic ...
-    
+    run_backward_pass(T);
+
+    float total_prob = 0.0f;
+    std::vector<float> h_beta0(N);
+
+    CHECK_CUDA_ERROR(cudaMemcpy(h_beta0.data(), &d_beta[0], N * sizeof(float), cudaMemcpyDeviceToHost));
+
+    // Use the h_obs, h_pi, and h_B pointers passed directly into the function.
+    // No need for intermediate vectors or extra copies from device.
+    int obs0 = h_obs[0];
+    for (int i = 0; i < N; ++i)
+    {
+        total_prob += h_pi[i] * h_B[i * M + obs0] * h_beta0[i];
+    }
+    return total_prob;
+}
+
+std::string HMM_GPU::viterbi(const int *h_obs, const float *h_A, const float *h_B, const float *h_pi, int T)
+{
+    if (T > max_T)
+    {
+        std::cerr << "Error: Sequence length T=" << T << " exceeds max_T=" << max_T << " allocated for HMM_GPU object." << std::endl;
+        return "";
+    }
+
+    CHECK_CUDA_ERROR(cudaMemcpy(d_obs, h_obs, T * sizeof(int), cudaMemcpyHostToDevice));
+    CHECK_CUDA_ERROR(cudaMemcpy(d_A, h_A, N * N * sizeof(float), cudaMemcpyHostToDevice));
+    CHECK_CUDA_ERROR(cudaMemcpy(d_B, h_B, N * M * sizeof(float), cudaMemcpyHostToDevice));
+    CHECK_CUDA_ERROR(cudaMemcpy(d_pi, h_pi, N * sizeof(float), cudaMemcpyHostToDevice));
+
+    kernel_viterbi_init<<<(N + 255) / 256, 256>>>(d_viterbi_probs, d_pi, d_B, h_obs[0], N, M);
+    CHECK_CUDA_ERROR(cudaGetLastError());
+
+    for (int t = 1; t < T; ++t)
+    {
+        float *d_v_prev = &d_viterbi_probs[(t - 1) * N];
+        float *d_v_curr = &d_viterbi_probs[t * N];
+        int *d_path_curr = &d_viterbi_paths[t * N];
+
+        kernel_viterbi_step<<<(N + 255) / 256, 256>>>(d_v_curr, d_path_curr, d_v_prev, d_A, d_B, h_obs[t], N, M);
+        CHECK_CUDA_ERROR(cudaGetLastError());
+    }
+
+    std::vector<int> h_path_matrix(T * N);
+    CHECK_CUDA_ERROR(cudaMemcpy(h_path_matrix.data(), d_viterbi_paths, T * N * sizeof(int), cudaMemcpyDeviceToHost));
+
+    std::vector<float> h_final_probs(N);
+    CHECK_CUDA_ERROR(cudaMemcpy(h_final_probs.data(), &d_viterbi_probs[(T - 1) * N], N * sizeof(float), cudaMemcpyDeviceToHost));
+
+    int last_state = 0;
+    float max_prob = -1.0f;
+    for (int i = 0; i < N; ++i)
+    {
+        if (h_final_probs[i] > max_prob)
+        {
+            max_prob = h_final_probs[i];
+            last_state = i;
+        }
+    }
+
+    std::vector<int> optimal_path(T);
+    optimal_path[T - 1] = last_state;
+    for (int t = T - 2; t >= 0; --t)
+    {
+        optimal_path[t] = h_path_matrix[(t + 1) * N + optimal_path[t + 1]];
+    }
+
     std::ostringstream ss;
-    for(int i=0; i<T; ++i) ss << h_path[i];
+    for (int i = 0; i < T; ++i)
+    {
+        ss << optimal_path[i];
+    }
+
     return ss.str();
 }
 
-void HMM_GPU::baum_welch(const int* h_obs, float* h_A, float* h_B, float* h_pi, int T, int max_iters, float tolerance) {
-    // Copy initial data to device
+void HMM_GPU::baum_welch(const int *h_obs, float *h_A, float *h_B, float *h_pi, int T, int max_iters, float tolerance)
+{
     CHECK_CUDA_ERROR(cudaMemcpy(d_obs, h_obs, T * sizeof(int), cudaMemcpyHostToDevice));
     CHECK_CUDA_ERROR(cudaMemcpy(d_A, h_A, N * N * sizeof(float), cudaMemcpyHostToDevice));
     CHECK_CUDA_ERROR(cudaMemcpy(d_B, h_B, N * M * sizeof(float), cudaMemcpyHostToDevice));
     CHECK_CUDA_ERROR(cudaMemcpy(d_pi, h_pi, N * sizeof(float), cudaMemcpyHostToDevice));
 
-    float old_logL = -std::numeric_limits<float>::infinity();
+    float old_prob = -1.0;
 
-    for (int iter = 0; iter < max_iters; ++iter) {
-        // --- E-STEP ---
-        run_forward_pass_scan(T);
-        // run_backward_pass_scan(T); // Full implementation would call this
+    for (int iter = 0; iter < max_iters; ++iter)
+    {
+        run_forward_pass(T);
+        run_backward_pass(T);
 
-        float new_logL;
-        kernel_compute_log_likelihood<<<1, N>>>(d_log_likelihood, d_alpha, N, T);
-        CHECK_CUDA_ERROR(cudaMemcpy(&new_logL, d_log_likelihood, sizeof(float), cudaMemcpyDeviceToHost));
+        float new_prob = 0.0f;
+        CHECK_CUBLAS_ERROR(cublasSasum(cublas_handle, N, &d_alpha[(T - 1) * N], 1, &new_prob));
 
-        if (fabs(new_logL - old_logL) < tolerance) break;
-        old_logL = new_logL;
+        if (fabsf(new_prob - old_prob) < tolerance)
+        {
+            break;
+        }
+        old_prob = new_prob;
 
-        kernel_compute_gamma_xi<<<T-1, 256, 256*sizeof(float)>>>(d_gamma, d_xi, d_alpha, d_beta, d_A, d_B, d_obs, N, M, T);
+        // E-Step: Compute gamma and xi
+        const int threads = 256;
+        kernel_compute_gamma_xi<<<T - 1, threads>>>(d_gamma, d_xi, d_alpha, d_beta, d_A, d_B, d_obs, N, M, T);
+        CHECK_CUDA_ERROR(cudaGetLastError());
+        kernel_compute_last_gamma<<<(N + 255) / 256, 256>>>(d_gamma, d_alpha, N, T);
         CHECK_CUDA_ERROR(cudaGetLastError());
 
-        // --- M-STEP ---
-        kernel_m_step<<<N, M>>>(d_pi, d_A, d_B, d_gamma, d_xi, d_obs, N, M, T);
+        // M-Step: Update pi, A, B
+        kernel_m_step<<<N, 256>>>(d_pi, d_A, d_B, d_gamma, d_xi, d_obs, N, M, T);
         CHECK_CUDA_ERROR(cudaGetLastError());
     }
 
-    // Copy final parameters back to host
     CHECK_CUDA_ERROR(cudaMemcpy(h_A, d_A, N * N * sizeof(float), cudaMemcpyDeviceToHost));
-    CHECK_CUDA_ERROR(cudaMemcpy(h_B, d_B, N * M * sizeof(float), cudaMemcpyDeviceToHost));
+    CHECK_CUDA_ERROR(cudaMemcpy(h_B, h_B, N * M * sizeof(float), cudaMemcpyDeviceToHost));
     CHECK_CUDA_ERROR(cudaMemcpy(h_pi, d_pi, N * sizeof(float), cudaMemcpyDeviceToHost));
 }
