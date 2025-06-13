@@ -1,4 +1,4 @@
-#include "hmm_gpu.cuh"
+#include "../include/hmm_gpu.cuh"
 #include <iostream>
 #include <vector>
 #include <random>
@@ -9,8 +9,8 @@
 #include <cuda_runtime.h>
 
 // Include the provided CPU implementation for comparison
-#include "hmm.hpp" // Assumes your CPU code is in hmm.hpp/cpp
-#include "data_loader.hpp"
+#include "../include/hmm.hpp" // Assumes your CPU code is in hmm.hpp/cpp
+#include "../include/data_loader.hpp"
 
 // Helper to generate random HMM data for testing
 void generate_random_hmm_data(std::vector<float>& A, std::vector<float>& B, std::vector<float>& pi, std::vector<int>& obs, int N, int M, int T) {
@@ -66,10 +66,28 @@ void run_benchmarks() {
             
             double viterbi_speedup = 0.0, forward_speedup = 0.0, bw_speedup = 0.0;
 
+            // Forward Algorithm Benchmark
+            {
+                auto start_cpu = std::chrono::high_resolution_clock::now();
+                std::vector<float> h_obs_float(h_obs.begin(), h_obs.end());
+                hmm_cpu.forward(h_obs_float.data(), nullptr, h_pi.data(), h_A.data(), h_B.data(), T, N, M);
+                auto end_cpu = std::chrono::high_resolution_clock::now();
+                auto cpu_duration = std::chrono::duration_cast<std::chrono::microseconds>(end_cpu - start_cpu).count();
+
+                auto start_gpu = std::chrono::high_resolution_clock::now();
+                hmm_gpu.forward(h_obs.data(), h_A.data(), h_B.data(), h_pi.data(), T);
+                cudaDeviceSynchronize();
+                auto end_gpu = std::chrono::high_resolution_clock::now();
+                auto gpu_duration = std::chrono::duration_cast<std::chrono::microseconds>(end_gpu - start_gpu).count();
+                if (gpu_duration > 0) forward_speedup = static_cast<double>(cpu_duration) / gpu_duration;
+            }
+
             // Viterbi Benchmark
             {
                 auto start_cpu = std::chrono::high_resolution_clock::now();
-                hmm_cpu.viterbi(h_obs.data(), nullptr, h_pi.data(), h_A.data(), h_B.data(), T, N, M);
+                // Convert observations to float for CPU implementation
+                std::vector<float> h_obs_float(h_obs.begin(), h_obs.end());
+                hmm_cpu.viterbi(h_obs_float.data(), nullptr, h_pi.data(), h_A.data(), h_B.data(), T, N, M);
                 auto end_cpu = std::chrono::high_resolution_clock::now();
                 auto cpu_duration = std::chrono::duration_cast<std::chrono::microseconds>(end_cpu - start_cpu).count();
 
@@ -87,7 +105,9 @@ void run_benchmarks() {
                 auto h_A_gpu = h_A, h_B_gpu = h_B, h_pi_gpu = h_pi;
                 
                 auto start_cpu = std::chrono::high_resolution_clock::now();
-                hmm_cpu.baum_welch(h_obs.data(), nullptr, h_pi_cpu.data(), h_A_cpu.data(), h_B_cpu.data(), T, N, M, max_iters);
+                // Convert observations to float for CPU implementation
+                std::vector<float> h_obs_float(h_obs.begin(), h_obs.end());
+                hmm_cpu.baum_welch(h_obs_float.data(), nullptr, h_pi_cpu.data(), h_A_cpu.data(), h_B_cpu.data(), T, N, M, max_iters);
                 auto end_cpu = std::chrono::high_resolution_clock::now();
                 auto cpu_duration = std::chrono::duration_cast<std::chrono::microseconds>(end_cpu - start_cpu).count();
 
@@ -102,7 +122,7 @@ void run_benchmarks() {
             std::cout << std::left << std::fixed << std::setprecision(2)
                       << std::setw(8) << N << std::setw(8) << T
                       << std::setw(18) << std::to_string(viterbi_speedup) + "x"
-                      << std::setw(18) << "N/A" // Forward is part of BW
+                      << std::setw(18) << std::to_string(forward_speedup) + "x"
                       << std::setw(25) << std::to_string(bw_speedup) + "x" << std::endl;
         }
     }

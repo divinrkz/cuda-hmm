@@ -154,6 +154,7 @@ static void run(const HMMConfig &cfg, int problem, int iterations,
             const std::vector<int> &obs_int = cfg.sequences[0];
             std::vector<float> obs_f(obs_int.begin(), obs_int.end());
 
+            // std::cout << "got here 1" << std::endl;
             hmm_cpu.baum_welch(obs_f.data(),
                                /*states*/ nullptr,
                                pi_train.data(),
@@ -163,6 +164,7 @@ static void run(const HMMConfig &cfg, int problem, int iterations,
                                cfg.N,
                                cfg.M,
                                iterations);
+            // std::cout << "got here 2" << std::endl;
 
             // Output trained parameters (same format expected by test suite)
             std::cout << std::fixed << std::setprecision(6);
@@ -222,6 +224,7 @@ static void run(const HMMConfig &cfg, int problem, int iterations,
         }
         else if (problem == 3)
         { // Baum-Welch
+            // std::cout << "got here" << std::endl;
             // training vectors (copies, as BW mutates them)
             std::vector<float> A_train = A_flat;
             std::vector<float> B_train = B_flat;
@@ -233,7 +236,16 @@ static void run(const HMMConfig &cfg, int problem, int iterations,
                 return;
             }
 
+
             const std::vector<int> &obs = cfg.sequences[0]; // as per original behaviour
+            std::cout << "obs: " << obs.size() << std::endl;
+            std::cout << "A_train: " << A_train.size() << std::endl;
+            std::cout << "B_train: " << B_train.size() << std::endl;
+            std::cout << "pi_train: " << pi_train.size() << std::endl;
+            std::cout << "iterations: " << iterations << std::endl;
+            std::cout << "tolerance: " << 1e-5f << std::endl;
+            std::cout << "cfg.N: " << cfg.N << std::endl;
+            std::cout << "cfg.M: " << cfg.M << std::endl;
             hmm_gpu.baum_welch(obs.data(),
                                A_train.data(),
                                B_train.data(),

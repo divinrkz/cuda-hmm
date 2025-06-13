@@ -75,7 +75,7 @@ def compare_matrices(p_mat, c_mat, name, tolerance=1e-4):
     assert p_mat.shape == c_mat.shape, \
         f"{name} shape mismatch: Python Ref is {p_mat.shape}, C++ Output is {c_mat.shape}"
     assert np.allclose(p_mat, c_mat, atol=tolerance), \
-        f"{name} mismatch beyond tolerance {tolerance}.\nPY:\n{p_mat}\nC++:\n{c_mat}"
+        f"{name} mismatch beyond tolerance {tolerance}.\nPY: {p_mat}\nC++: {c_mat}"
 
 # --- Test Functions (Orchestrate running Python and C++ and comparing) ---
 
