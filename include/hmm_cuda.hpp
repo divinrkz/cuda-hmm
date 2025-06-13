@@ -15,14 +15,12 @@ private:
     int max_T_allocated;
     int current_T_allocated;  // Track current allocation size
     
-    // Dynamic memory management methods
     void initializeFixedMemory(int num_states, int num_observations);
     void ensureSequenceMemory(int T, int N, int M);
     void ensureBaumWelchMemory(int T, int N, int M);
     void freeSequenceMemory();
     void freeFixedMemory();
     
-    // Utility methods
     void convertToLogSpace(float* probs, float* log_probs, int size);
     void normalizeArray(float* array, int size);
     void copyObservationsToDevice(float* obs, int T);
