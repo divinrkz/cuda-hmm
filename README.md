@@ -42,34 +42,48 @@ cmake --build .
 
 The executable will be created in the `build/bin` directory.
 
-## Running the Program
-You can run the program from the build directory:
+## Usage
+
+Run HMM algorithms on configuration files:
+
 ```bash
-./bin/cuda-hmm
+# Forward algorithm
+./build/cuda-hmm -c config_file.cfg -p1
+
+# Viterbi algorithm  
+./build/cuda-hmm -c config_file.cfg -p2
+
+# Baum-Welch training
+./build/cuda-hmm -c config_file.cfg -p3 -n 100
+
+# Backward algorithm
+./build/cuda-hmm -c config_file.cfg -p4
 ```
 
-## Running Tests
-To run the tests:
+## Testing
 
-1. Make sure you've built the project.
+Test implementation against Python reference:
 
-2. From the build directory, you can run the tests in two ways:
+```bash
+# Test all algorithms on all config files
+python3 test_hmm.py --comprehensive --hmm-exe ./build/cuda-hmm
 
-   a. Using the test executable directly:
-   ```bash
-   ./test_hmm
-   ```
+# Test specific config file
+python3 test_hmm.py --config test_configs/coin_flip.cfg --hmm-exe ./build/cuda-hmm
 
-   b. Using CTest (recommended):
-   ```bash
-   ctest
-   ```
+# Test specific algorithm (1=forward, 2=viterbi, 3=baum-welch, 4=backward)
+python3 test_hmm.py --config test_configs/weather.cfg --problem 2 --hmm-exe ./build/cuda-hmm
+```
 
-The tests will run through various HMM scenarios including (for now):
-- Constructor/Destructor tests
-- Simple Viterbi tests
+Run unit tests:
 
-Each test will print its progress and results. If any test fails, it will throw an assertion error. 
+```bash
+# Using CTest (recommended)
+cd build && ctest
+
+# Using test executable directly
+./build/test_hmm
+```
 
 ## Contributors
 - Mugisha AbdulKarim (@abdulkarim-mugisha)

@@ -1,5 +1,5 @@
-#include "hmm.hpp"
-#include "data_loader.hpp"
+#include "../include/hmm.hpp"
+#include "../include/data_loader.hpp"
 #include <iostream>
 #include <cassert>
 #include <iomanip>
@@ -41,6 +41,7 @@ public:
         
         IHMM hmm(data.N, data.M);
 
+        // std::cout << "got here" << std::endl;
         for (const auto& sequence : data.sequences) {
 
             float* obs = HMMDataLoader::convertSequenceToFloat(sequence);
@@ -51,7 +52,8 @@ public:
                                             sequence.length(), data.N, data.M);        
             // Print results in same format as the Python
             std::cout << std::left << std::setw(30) << sequence 
-                        << std::setw(30) << result << std::endl;       
+                        << std::setw(30) << result << std::endl;   
+            std::cout << "result: " << result << std::endl;    
             assert(!result.empty());
             // would probably want to check if the result is correct like get solution set from 155 and compare to that.      
             delete[] obs;

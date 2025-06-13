@@ -3,6 +3,7 @@
 #include <iostream>
 #include <chrono>
 #include <iomanip>
+#include <cmath>
 
 // Helper function to format duration
 std::string format_duration(std::chrono::microseconds duration)
@@ -28,36 +29,35 @@ float **IHMM::forward(float *obs, int *states, float *start_p, float *trans_p, f
 {
     auto start = std::chrono::high_resolution_clock::now();
 
-    // CUDA PARALLELIZATION STRATEGY FOR FORWARD ALGORITHM:
-    // 1. TRELLIS PARALLELIZATION: Create a T×N trellis (matrix) where each cell α(t,i) represents
-    //    the probability of being in state i at time t. Each time step depends on the previous one,
-    //    but within each time step, all states can be computed in parallel.
-    //
-    // 2. THREAD MAPPING: Launch N threads per time step, where each thread computes one state:
-    //    - threadIdx.x = state_index (0 to N-1)
-    //    - blockIdx.x = time_step (2 to T, since step 1 is initialization)
-    //
-    // 3. PARALLEL REDUCTION: The inner loop (summing over previous states) can use
-    //    parallel reduction to compute the sum more efficiently than sequential addition
-
-    // Create and initialize alphas (T+1 x N matrix)
-    float **alphas = new float *[T + 1];
-    for (int t = 0; t <= T; t++)
+    // Create and initialize alphas (T x N matrix) - FIXED: Use T instead of T+1 for consistency
+    float **alphas = new float *[T];
+    for (int t = 0; t < T; t++)
     {
         alphas[t] = new float[N](); // initialize with zeros
     }
 
-    // Initialize first time step
+    // Initialize first time step (t=0)
     // CUDA: This initialization can be parallelized with N threads
     for (int i = 0; i < N; i++)
     {
-        alphas[1][i] = start_p[i] * emit_p[i * M + static_cast<int>(obs[0])];
+        alphas[0][i] = start_p[i] * emit_p[i * M + static_cast<int>(obs[0])];
+    }
+
+    // Normalize first time step to prevent underflow
+    float sum = 0.0f;
+    for (int i = 0; i < N; i++) {
+        sum += alphas[0][i];
+    }
+    if (sum > 0) {
+        for (int i = 0; i < N; i++) {
+            alphas[0][i] /= sum;
+        }
     }
 
     // Recursive step
     // CUDA: Each time step t requires synchronization, but within each time step,
     // all N states can be computed in parallel
-    for (int t = 2; t <= T; t++)
+    for (int t = 1; t < T; t++)
     {
         // CUDA: Each thread handles one curr_state
         for (int curr_state = 0; curr_state < N; curr_state++)
@@ -67,10 +67,21 @@ float **IHMM::forward(float *obs, int *states, float *start_p, float *trans_p, f
             // Instead of sequential sum, use parallel reduction with shared memory
             for (int prev_state = 0; prev_state < N; prev_state++)
             {
-                prob += emit_p[curr_state * M + static_cast<int>(obs[t - 1])] *
+                prob += emit_p[curr_state * M + static_cast<int>(obs[t])] *
                         (alphas[t - 1][prev_state] * trans_p[prev_state * N + curr_state]);
             }
             alphas[t][curr_state] = prob;
+        }
+        
+        // Normalize each time step to prevent underflow
+        sum = 0.0f;
+        for (int i = 0; i < N; i++) {
+            sum += alphas[t][i];
+        }
+        if (sum > 0) {
+            for (int i = 0; i < N; i++) {
+                alphas[t][i] /= sum;
+            }
         }
         // CUDA: __syncthreads() or grid synchronization needed here before next time step
     }
@@ -87,14 +98,14 @@ float **IHMM::backward(float *obs, int *states, float *start_p, float *trans_p, 
     auto start = std::chrono::high_resolution_clock::now();
 
     // CUDA PARALLELIZATION STRATEGY FOR BACKWARD ALGORITHM:
-    // 1. REVERSE TRELLIS: Similar to forward but processes time steps in reverse (T to 0)
+    // 1. REVERSE TRELLIS: Similar to forward but processes time steps in reverse (T-1 to 0)
     // 2. SAME THREAD MAPPING: N threads per time step, each computing one state
     // 3. MEMORY COALESCING: Ensure memory access patterns are coalesced for better performance
     // 4. SHARED MEMORY: Use shared memory to store betas values for current time step
 
-    // Create and initialize betas (T+1 x N matrix)
-    float **betas = new float *[T + 1];
-    for (int t = 0; t <= T; t++)
+    // Create and initialize betas (T x N matrix)
+    float **betas = new float *[T];
+    for (int t = 0; t < T; t++)
     {
         betas[t] = new float[N](); // initialize with zeros
     }
@@ -103,12 +114,12 @@ float **IHMM::backward(float *obs, int *states, float *start_p, float *trans_p, 
     // CUDA: Parallel initialization with N threads
     for (int i = 0; i < N; i++)
     {
-        betas[T][i] = 1.0f;
+        betas[T-1][i] = 1.0f;
     }
 
     // Recursive step (going backwards in time)
     // CUDA: Process time steps sequentially, but parallelize within each time step
-    for (int t = T - 1; t >= 0; t--)
+    for (int t = T - 2; t >= 0; t--)
     {
         // CUDA KERNEL: Each thread computes one curr_state
         for (int curr_state = 0; curr_state < N; curr_state++)
@@ -117,20 +128,31 @@ float **IHMM::backward(float *obs, int *states, float *start_p, float *trans_p, 
             // CUDA: Parallel reduction opportunity here
             for (int next_state = 0; next_state < N; next_state++)
             {
-                if (t == 0)
-                {
-                    // Special case for t=0: use start probabilities
-                    prob += betas[t + 1][next_state] * start_p[next_state] * emit_p[next_state * M + static_cast<int>(obs[t])];
-                }
-                else
-                {
-                    // Regular case: use transition probabilities
-                    prob += betas[t + 1][next_state] * trans_p[curr_state * N + next_state] * emit_p[next_state * M + static_cast<int>(obs[t])];
-                }
+                // β_t(i) = Σ_j [a_ij * b_j(o_{t+1}) * β_{t+1}(j)]
+                prob += trans_p[curr_state * N + next_state] * 
+                        emit_p[next_state * M + static_cast<int>(obs[t + 1])] *
+                        betas[t + 1][next_state];
             }
             betas[t][curr_state] = prob;
+            
+            // DEBUGGING: Check for NaN values
+            if (std::isnan(prob) || std::isinf(prob)) {
+                std::cerr << "NaN/Inf detected at t=" << t << ", state=" << curr_state << std::endl;
+                std::cerr << "obs[" << t+1 << "]=" << obs[t+1] << std::endl;
+            }
         }
+        
         // CUDA: Synchronization needed before processing previous time step
+        // Normalize to prevent underflow (consistent with forward algorithm)
+        float sum = 0.0f;
+        for (int i = 0; i < N; i++) {
+            sum += betas[t][i];
+        }
+        if (sum > 0) {
+            for (int i = 0; i < N; i++) {
+                betas[t][i] /= sum;
+            }
+        }
     }
 
     auto end = std::chrono::high_resolution_clock::now();
@@ -161,8 +183,8 @@ void IHMM::baum_welch(float *obs, int *states, float *start_p, float *trans_p, f
         gamma[t] = new float[N]();
     }
 
-    float **xi = new float *[T];
-    for (int t = 0; t < T; t++)
+    float **xi = new float *[T-1]; // Only T-1 xi values (transitions between adjacent time steps)
+    for (int t = 0; t < T-1; t++)
     {
         xi[t] = new float[N * N]();
     }
@@ -186,10 +208,20 @@ void IHMM::baum_welch(float *obs, int *states, float *start_p, float *trans_p, f
             {
                 denom += alphas[t][i] * betas[t][i];
             }
-            // CUDA: Each thread computes gamma for one (t,i) pair
-            for (int i = 0; i < N; i++)
-            {
-                gamma[t][i] = alphas[t][i] * betas[t][i] / denom;
+            
+            // Avoid division by zero
+            if (denom > 1e-10) {
+                // CUDA: Each thread computes gamma for one (t,i) pair
+                for (int i = 0; i < N; i++)
+                {
+                    gamma[t][i] = alphas[t][i] * betas[t][i] / denom;
+                }
+            } else {
+                // If denominator is too small, use uniform distribution
+                for (int i = 0; i < N; i++)
+                {
+                    gamma[t][i] = 1.0f / N;
+                }
             }
         }
 
@@ -204,17 +236,32 @@ void IHMM::baum_welch(float *obs, int *states, float *start_p, float *trans_p, f
             {
                 for (int j = 0; j < N; j++)
                 {
-                    xi[t][i * N + j] = alphas[t][i] * trans_p[i * N + j] * emit_p[j * M + static_cast<int>(obs[t + 1])] * betas[t + 1][j];
+                    xi[t][i * N + j] = alphas[t][i] * trans_p[i * N + j] * 
+                                      emit_p[j * M + static_cast<int>(obs[t + 1])] * 
+                                      betas[t + 1][j];
                     denom += xi[t][i * N + j];
                 }
             }
-            // Normalize xi
-            // CUDA: Parallel normalization with N×N threads
-            for (int i = 0; i < N; i++)
-            {
-                for (int j = 0; j < N; j++)
+            
+            // Normalize xi (avoid division by zero)
+            if (denom > 1e-10) {
+                // CUDA: Parallel normalization with N×N threads
+                for (int i = 0; i < N; i++)
                 {
-                    xi[t][i * N + j] /= denom;
+                    for (int j = 0; j < N; j++)
+                    {
+                        xi[t][i * N + j] /= denom;
+                    }
+                }
+            } else {
+                // If denominator is too small, use uniform distribution
+                float uniform_prob = 1.0f / (N * N);
+                for (int i = 0; i < N; i++)
+                {
+                    for (int j = 0; j < N; j++)
+                    {
+                        xi[t][i * N + j] = uniform_prob;
+                    }
                 }
             }
         }
@@ -244,7 +291,13 @@ void IHMM::baum_welch(float *obs, int *states, float *start_p, float *trans_p, f
                     numer += xi[t][i * N + j];
                     denom += gamma[t][i];
                 }
-                trans_p[i * N + j] = numer / denom;
+                
+                // Avoid division by zero
+                if (denom > 1e-10) {
+                    trans_p[i * N + j] = numer / denom;
+                } else {
+                    trans_p[i * N + j] = 1.0f / N;  // Uniform fallback
+                }
             }
         }
 
@@ -266,17 +319,30 @@ void IHMM::baum_welch(float *obs, int *states, float *start_p, float *trans_p, f
                     }
                     denom += gamma[t][i];
                 }
-                emit_p[i * M + j] = numer / denom;
+                
+                // Avoid division by zero
+                if (denom > 1e-10) {
+                    emit_p[i * M + j] = numer / denom;
+                } else {
+                    emit_p[i * M + j] = 1.0f / M;  // Uniform fallback
+                }
             }
         }
 
         // Clean up alphas and betas from this iteration (they're reallocated each time by forward/backward)
-        for (int t = 0; t <= T; t++)
+        
+        // Clean up alphas (T rows: indices 0 to T-1)
+        for (int t = 0; t < T; t++)
         {
             delete[] alphas[t];
-            delete[] betas[t];
         }
         delete[] alphas;
+        
+        // Clean up betas (T rows: indices 0 to T-1)  
+        for (int t = 0; t < T; t++)
+        {
+            delete[] betas[t];
+        }
         delete[] betas;
     }
 
@@ -284,9 +350,13 @@ void IHMM::baum_welch(float *obs, int *states, float *start_p, float *trans_p, f
     for (int t = 0; t < T; t++)
     {
         delete[] gamma[t];
-        delete[] xi[t];
     }
     delete[] gamma;
+    
+    for (int t = 0; t < T-1; t++)  // xi has T-1 rows
+    {
+        delete[] xi[t];
+    }
     delete[] xi;
 
     auto end = std::chrono::high_resolution_clock::now();
