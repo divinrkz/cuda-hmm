@@ -64,82 +64,6 @@ struct init_viterbi_functor {
     }
 };
 
-
-
-void HMMCuda::initializeDeviceMemory(int max_T, int num_states, int num_observations) {
-    max_T_allocated = max_T;
-
-    cudaCheck(cudaMalloc(&d_alpha, max_T * num_states * sizeof(float)));
-    cudaCheck(cudaMalloc(&d_beta, max_T * num_states * sizeof(float)));
-    cudaCheck(cudaMalloc(&d_gamma, max_T * num_states * sizeof(float)));
-    cudaCheck(cudaMalloc(&d_xi, max_T * num_states * num_states * sizeof(float)));
-    
-    cudaCheck(cudaMalloc(&d_V_curr, num_states * sizeof(float)));
-    cudaCheck(cudaMalloc(&d_V_prev, num_states * sizeof(float)));
-    
-    cudaCheck(cudaMalloc(&d_log_trans_p, num_states * num_states * sizeof(float)));
-    cudaCheck(cudaMalloc(&d_log_emit_p, num_states * num_observations * sizeof(float)));
-    cudaCheck(cudaMalloc(&d_log_start_p, num_states * sizeof(float)));
-    
-    cudaCheck(cudaMalloc(&d_path, max_T * num_states * sizeof(int)));
-    cudaCheck(cudaMalloc(&d_obs, max_T * sizeof(int)));
-    
-    h_alpha = new float*[max_T];
-    h_beta = new float*[max_T];
-    for (int t = 0; t < max_T; t++) {
-        h_alpha[t] = new float[num_states];
-        h_beta[t] = new float[num_states];
-    }
-}
-
-void HMMCuda::freeDeviceMemory() {
-    cudaCheck(cudaFree(d_alpha));
-    cudaCheck(cudaFree(d_beta));
-    cudaCheck(cudaFree(d_gamma));
-    cudaCheck(cudaFree(d_xi));
-    cudaCheck(cudaFree(d_V_curr));
-    cudaCheck(cudaFree(d_V_prev));
-    cudaCheck(cudaFree(d_log_trans_p));
-    cudaCheck(cudaFree(d_log_emit_p));
-    cudaCheck(cudaFree(d_log_start_p));
-    cudaCheck(cudaFree(d_path));
-    cudaCheck(cudaFree(d_obs));
-    
-    if (h_alpha) {
-        for (int t = 0; t < max_T_allocated; t++) {
-            delete[] h_alpha[t];
-            delete[] h_beta[t];
-        }
-        delete[] h_alpha;
-        delete[] h_beta;
-    }
-}
-
-void HMMCuda::convertToLogSpace(float* probs, float* log_probs, int size) {
-    thrust::device_ptr<float> d_probs(probs);
-    thrust::device_ptr<float> d_log_probs(log_probs);
-    
-    thrust::transform(d_probs, d_probs + size, d_log_probs, log_transform());
-}
-
-void HMMCuda::normalizeArray(float* array, int size) {
-    thrust::device_ptr<float> d_array(array);
-    float sum = thrust::reduce(d_array, d_array + size, 0.0f, thrust::plus<float>());
-    
-    if (sum > 0) {
-        thrust::transform(d_array, d_array + size, d_array, normalize_transform(sum));
-    }
-}
-
-HMMCuda::HMMCuda(int num_states, int num_observations) : IHMM(num_states, num_observations) {
-    initializeDeviceMemory(10000, num_states, num_observations);
-}
-
-HMMCuda::~HMMCuda() {
-    freeDeviceMemory();
-}
-
-
 // Forward algorithm kernel
 __global__ void forwardKernel(float* alpha_curr, float* alpha_prev, float* trans_p, 
                             float* emit_p, int* obs, int N, int M, int t) {
@@ -264,18 +188,147 @@ __global__ void baumWelchMStepKernel(float* new_trans_p, float* new_emit_p,
     }
 }
 
+void HMMCuda::initializeFixedMemory(int num_states, int num_observations) {
+    cudaCheck(cudaMalloc(&d_log_trans_p, num_states * num_states * sizeof(float)));
+    cudaCheck(cudaMalloc(&d_log_emit_p, num_states * num_observations * sizeof(float)));
+    cudaCheck(cudaMalloc(&d_log_start_p, num_states * sizeof(float)));
+    
+    cudaCheck(cudaMalloc(&d_V_curr, num_states * sizeof(float)));
+    cudaCheck(cudaMalloc(&d_V_prev, num_states * sizeof(float)));
+    
+    // Initialize sequence-dependent pointers to null
+    d_alpha = nullptr;
+    d_beta = nullptr;
+    d_gamma = nullptr;
+    d_xi = nullptr;
+    d_path = nullptr;
+    d_obs = nullptr;
+    h_alpha = nullptr;
+    h_beta = nullptr;
+    
+    current_T_allocated = 0;
+    max_T_allocated = 0;
+}
 
+void HMMCuda::ensureSequenceMemory(int T, int N, int M) {
+    if (T > current_T_allocated) {      
+        if (d_obs) cudaFree(d_obs);
+        if (d_alpha) cudaFree(d_alpha);
+        if (d_beta) cudaFree(d_beta);
+        if (d_path) cudaFree(d_path);
+        
+        if (h_alpha) {
+            for (int t = 0; t < max_T_allocated; t++) {
+                delete[] h_alpha[t];
+                delete[] h_beta[t];
+            }
+            delete[] h_alpha;
+            delete[] h_beta;
+        }
+        
+        cudaCheck(cudaMalloc(&d_obs, T * sizeof(int)));
+        cudaCheck(cudaMalloc(&d_alpha, T * N * sizeof(float)));
+        cudaCheck(cudaMalloc(&d_beta, T * N * sizeof(float)));
+        cudaCheck(cudaMalloc(&d_path, T * N * sizeof(int)));
+        
+        h_alpha = new float*[T];
+        h_beta = new float*[T];
+        for (int t = 0; t < T; t++) {
+            h_alpha[t] = new float[N];
+            h_beta[t] = new float[N];
+        }
+        
+        current_T_allocated = T;
+        max_T_allocated = T;
+    }
+}
+
+void HMMCuda::ensureBaumWelchMemory(int T, int N, int M) {
+    if (d_gamma == nullptr || d_xi == nullptr) {
+        
+        size_t gamma_size = T * N * sizeof(float);
+        size_t xi_size = T * N * N * sizeof(float);
+        
+        if (d_gamma) cudaFree(d_gamma);
+        if (d_xi) cudaFree(d_xi);
+        
+        cudaCheck(cudaMalloc(&d_gamma, gamma_size));
+        cudaCheck(cudaMalloc(&d_xi, xi_size));
+    
+    }
+}
+
+void HMMCuda::freeSequenceMemory() {
+    if (d_obs) { cudaFree(d_obs); d_obs = nullptr; }
+    if (d_alpha) { cudaFree(d_alpha); d_alpha = nullptr; }
+    if (d_beta) { cudaFree(d_beta); d_beta = nullptr; }
+    if (d_path) { cudaFree(d_path); d_path = nullptr; }
+    if (d_gamma) { cudaFree(d_gamma); d_gamma = nullptr; }
+    if (d_xi) { cudaFree(d_xi); d_xi = nullptr; }
+    
+    if (h_alpha) {
+        for (int t = 0; t < max_T_allocated; t++) {
+            delete[] h_alpha[t];
+            delete[] h_beta[t];
+        }
+        delete[] h_alpha;
+        delete[] h_beta;
+        h_alpha = nullptr;
+        h_beta = nullptr;
+    }
+    
+    current_T_allocated = 0;
+    max_T_allocated = 0;
+}
+
+void HMMCuda::freeFixedMemory() {
+    if (d_log_trans_p) { cudaFree(d_log_trans_p); d_log_trans_p = nullptr; }
+    if (d_log_emit_p) { cudaFree(d_log_emit_p); d_log_emit_p = nullptr; }
+    if (d_log_start_p) { cudaFree(d_log_start_p); d_log_start_p = nullptr; }
+    if (d_V_curr) { cudaFree(d_V_curr); d_V_curr = nullptr; }
+    if (d_V_prev) { cudaFree(d_V_prev); d_V_prev = nullptr; }
+}
+
+void HMMCuda::convertToLogSpace(float* probs, float* log_probs, int size) {
+    thrust::device_ptr<float> d_probs(probs);
+    thrust::device_ptr<float> d_log_probs(log_probs);
+    
+    thrust::transform(d_probs, d_probs + size, d_log_probs, log_transform());
+}
+
+void HMMCuda::normalizeArray(float* array, int size) {
+    thrust::device_ptr<float> d_array(array);
+    float sum = thrust::reduce(d_array, d_array + size, 0.0f, thrust::plus<float>());
+    
+    if (sum > 0) {
+        thrust::transform(d_array, d_array + size, d_array, normalize_transform(sum));
+    }
+}
+
+void HMMCuda::copyObservationsToDevice(float* obs, int T) {
+    int* h_obs_temp = new int[T];
+    for (int i = 0; i < T; i++) {
+        h_obs_temp[i] = static_cast<int>(obs[i]);
+    }
+    cudaCheck(cudaMemcpy(d_obs, h_obs_temp, T * sizeof(int), cudaMemcpyHostToDevice));
+    delete[] h_obs_temp;
+}
+
+HMMCuda::HMMCuda(int num_states, int num_observations) : IHMM(num_states, num_observations) {
+    initializeFixedMemory(num_states, num_observations);
+}
+
+HMMCuda::~HMMCuda() {
+    freeSequenceMemory();
+    freeFixedMemory();
+}
 
 float **HMMCuda::forward(float *obs, int *states, float *start_p, float *trans_p, 
                float *emit_p, int T, int N, int M) {
     
-    thrust::host_vector<int> h_obs(T);
-    for (int i = 0; i < T; i++) {
-        h_obs[i] = static_cast<int>(obs[i]);
-    }
-    thrust::device_vector<int> d_obs_vec = h_obs;
-    cudaCheck(cudaMemcpy(d_obs, thrust::raw_pointer_cast(d_obs_vec.data()), 
-                       T * sizeof(int), cudaMemcpyDeviceToDevice));
+    ensureSequenceMemory(T, N, M);
+    
+    copyObservationsToDevice(obs, T);
     
     float *d_trans_p_temp, *d_emit_p_temp, *d_start_p_temp;
     cudaCheck(cudaMalloc(&d_trans_p_temp, N * N * sizeof(float)));
@@ -322,13 +375,9 @@ float **HMMCuda::forward(float *obs, int *states, float *start_p, float *trans_p
 float **HMMCuda::backward(float *obs, int *states, float *start_p, float *trans_p,
                 float *emit_p, int T, int N, int M) {
     
-    thrust::host_vector<int> h_obs(T);
-    for (int i = 0; i < T; i++) {
-        h_obs[i] = static_cast<int>(obs[i]);
-    }
-    thrust::device_vector<int> d_obs_vec = h_obs;
-    cudaCheck(cudaMemcpy(d_obs, thrust::raw_pointer_cast(d_obs_vec.data()), 
-                       T * sizeof(int), cudaMemcpyDeviceToDevice));
+    ensureSequenceMemory(T, N, M);
+    
+    copyObservationsToDevice(obs, T);
     
     float *d_trans_p_temp, *d_emit_p_temp;
     cudaCheck(cudaMalloc(&d_trans_p_temp, N * N * sizeof(float)));
@@ -365,14 +414,10 @@ float **HMMCuda::backward(float *obs, int *states, float *start_p, float *trans_
 
 std::string HMMCuda::viterbi(float *obs, int *states, float *start_p, float *trans_p,
                    float *emit_p, int T, int N, int M) {
+
+    ensureSequenceMemory(T, N, M);
     
-    thrust::host_vector<int> h_obs(T);
-    for (int i = 0; i < T; i++) {
-        h_obs[i] = static_cast<int>(obs[i]);
-    }
-    thrust::device_vector<int> d_obs_vec = h_obs;
-    cudaCheck(cudaMemcpy(d_obs, thrust::raw_pointer_cast(d_obs_vec.data()), 
-                       T * sizeof(int), cudaMemcpyDeviceToDevice));
+    copyObservationsToDevice(obs, T);
     
     thrust::device_vector<float> d_trans_vec(N * N), d_emit_vec(N * M), d_start_vec(N);
     cudaCheck(cudaMemcpy(thrust::raw_pointer_cast(d_trans_vec.data()), 
@@ -434,21 +479,17 @@ std::string HMMCuda::viterbi(float *obs, int *states, float *start_p, float *tra
     return result.str();
 }
 
-
 void HMMCuda::baum_welch(float *obs, int *states, float *start_p, float *trans_p,
                 float *emit_p, int T, int N, int M, int N_iters) {
+
+    ensureSequenceMemory(T, N, M);
+    ensureBaumWelchMemory(T, N, M);
     
     for (int iter = 0; iter < N_iters; iter++) {
         forward(obs, states, start_p, trans_p, emit_p, T, N, M);
         backward(obs, states, start_p, trans_p, emit_p, T, N, M);
         
-        thrust::host_vector<int> h_obs(T);
-        for (int i = 0; i < T; i++) {
-            h_obs[i] = static_cast<int>(obs[i]);
-        }
-        thrust::device_vector<int> d_obs_vec = h_obs;
-        cudaCheck(cudaMemcpy(d_obs, thrust::raw_pointer_cast(d_obs_vec.data()), 
-                           T * sizeof(int), cudaMemcpyDeviceToDevice));
+        copyObservationsToDevice(obs, T);
         
         float *d_trans_p_temp, *d_emit_p_temp;
         cudaCheck(cudaMalloc(&d_trans_p_temp, N * N * sizeof(float)));

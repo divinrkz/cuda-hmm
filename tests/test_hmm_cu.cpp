@@ -110,8 +110,10 @@ public:
         std::vector<std::pair<int, int>> test_configs = {
             {10, 5},    // Small: 10 states, 5 observations
             {50, 20},   // Medium: 50 states, 20 observations  
+            {60, 20},   // Optimal: 50 states, 20 observations  
             {100, 50},  // Large: 100 states, 50 observations
             {500, 100}  // Very Large: 500 states, 100 observations
+
         };
         
         std::vector<int> sequence_lengths = {100, 500, 1000, 5000};
@@ -155,7 +157,7 @@ public:
                           << std::setw(15) << T
                           << std::setw(15) << std::fixed << std::setprecision(2) << cpu_time
                           << std::setw(15) << std::fixed << std::setprecision(2) << gpu_time
-                          << std::setw(15) << std::fixed << std::setprecision(1) << speedup << "x" << std::endl;
+                          << std::setw(15) << std::fixed << std::setprecision(1) << speedup << std::endl;
                 
                 // Cleanup
                 delete[] obs;

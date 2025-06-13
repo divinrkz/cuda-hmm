@@ -13,24 +13,32 @@ private:
     // Host memory for results
     float **h_alpha, **h_beta;
     int max_T_allocated;
+    int current_T_allocated;  // Track current allocation size
     
-    void initializeDeviceMemory(int max_T, int num_states, int num_observations);
-    void freeDeviceMemory();
+    // Dynamic memory management methods
+    void initializeFixedMemory(int num_states, int num_observations);
+    void ensureSequenceMemory(int T, int N, int M);
+    void ensureBaumWelchMemory(int T, int N, int M);
+    void freeSequenceMemory();
+    void freeFixedMemory();
+    
+    // Utility methods
     void convertToLogSpace(float* probs, float* log_probs, int size);
     void normalizeArray(float* array, int size);
+    void copyObservationsToDevice(float* obs, int T);
 
 public:
     HMMCuda(int num_states, int num_observations);
     ~HMMCuda();
     
     float **forward(float *obs, int *states, float *start_p, float *trans_p, 
-                   float *emit_p, int T, int N, int M) override;
+                   float *emit_p, int T, int N, int M);
     float **backward(float *obs, int *states, float *start_p, float *trans_p,
-                    float *emit_p, int T, int N, int M) override;
+                    float *emit_p, int T, int N, int M);
     std::string viterbi(float *obs, int *states, float *start_p, float *trans_p,
-                       float *emit_p, int T, int N, int M) override;
+                       float *emit_p, int T, int N, int M);
     void baum_welch(float *obs, int *states, float *start_p, float *trans_p,
-                    float *emit_p, int T, int N, int M, int N_iters) override;
+                    float *emit_p, int T, int N, int M, int N_iters);
     void forward_backward(float *obs, int *states, float *start_p, float *trans_p,
-                         float *emit_p, int T, int N, int M) override;
+                         float *emit_p, int T, int N, int M);
 };
