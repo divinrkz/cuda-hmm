@@ -18,9 +18,9 @@ set(HMM_CPU_SOURCES
 )
 
 set(HMM_CUDA_SOURCES
-    src/hmm/hmm_impl.cu
+    src/hmm/hmm_gpu.cu
     include/hmm.hpp
-    include/hmm_cuda.hpp
+    include/hmm_gpu.cuh
     include/data_loader.hpp
 )
 
@@ -38,7 +38,7 @@ add_executable(test_hmm_cpu tests/test_hmm.cpp)
 target_link_libraries(test_hmm_cpu hmm_cpu_lib)
 
 
-add_executable(test_hmm_gpu tests/test_hmm_cu.cpp)  
+add_executable(test_hmm_gpu tests/test_hmm_gpu.cpp)  
 target_link_libraries(test_hmm_gpu hmm_cpu_lib hmm_cuda_lib)
 
 
@@ -53,8 +53,13 @@ set_property(TARGET test_hmm_gpu PROPERTY CUDA_SEPARABLE_COMPILATION ON)
 set_property(TARGET test_hmm_gpu PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
 
-add_executable(cuda-hmm src/main.cpp)
-target_link_libraries(cuda-hmm hmm_cpu_lib hmm_cuda_lib ${CUDA_LINK_LIBRARIES})
+add_executable(hmm src/main.cpp)
+target_link_libraries(hmm hmm_cpu_lib hmm_cuda_lib ${CUDA_LINK_LIBRARIES})
+
+add_executable(hmm_gpu src/main_gpu.cpp)
+target_link_libraries(hmm_gpu hmm_cpu_lib hmm_cuda_lib ${CUDA_LINK_LIBRARIES})
+set_property(TARGET hmm_gpu PROPERTY CXX_STANDARD 17)
+set_property(TARGET hmm_gpu PROPERTY CUDA_STANDARD 17)
 
 
 target_compile_options(hmm_cuda_lib PRIVATE 
@@ -65,7 +70,7 @@ target_compile_options(test_hmm_gpu PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:--keep;-src-in-ptx;--generate-line-info;--extended-lambda>
 )
 
-target_compile_options(cuda-hmm PRIVATE 
+target_compile_options(hmm PRIVATE 
     $<$<COMPILE_LANGUAGE:CUDA>:--keep;-src-in-ptx;--generate-line-info;--extended-lambda>
 )
 
@@ -74,11 +79,11 @@ set_property(TARGET hmm_cpu_lib PROPERTY CXX_STANDARD 17)
 set_property(TARGET hmm_cuda_lib PROPERTY CXX_STANDARD 17)
 set_property(TARGET test_hmm_cpu PROPERTY CXX_STANDARD 17)
 set_property(TARGET test_hmm_gpu PROPERTY CXX_STANDARD 17)
-set_property(TARGET cuda-hmm PROPERTY CXX_STANDARD 17)
+set_property(TARGET hmm PROPERTY CXX_STANDARD 17)
 
 set_property(TARGET hmm_cuda_lib PROPERTY CUDA_STANDARD 17)
 set_property(TARGET test_hmm_gpu PROPERTY CUDA_STANDARD 17)
-set_property(TARGET cuda-hmm PROPERTY CUDA_STANDARD 17)
+set_property(TARGET hmm PROPERTY CUDA_STANDARD 17)
 
 # Add tests
 add_test(NAME test_hmm_cpu_suite COMMAND test_hmm_cpu)
@@ -92,7 +97,7 @@ set_tests_properties(test_hmm_gpu_suite PROPERTIES
 )
 
 
-install(TARGETS cuda-hmm test_hmm_cpu test_hmm_gpu
+install(TARGETS hmm hmm_gpu test_hmm_cpu test_hmm_gpu
     RUNTIME DESTINATION bin
 )
 

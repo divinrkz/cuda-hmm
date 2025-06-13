@@ -32,5 +32,4 @@ public:
     virtual float **backward(float *obs, int *states, float *start_p, float *trans_p, float *emit_p, int T, int N, int M);
     virtual std::string viterbi(float *obs, int *states, float *start_p, float *trans_p, float *emit_p, int T, int N, int M);
     virtual void baum_welch(float *obs, int *states, float *start_p, float *trans_p, float *emit_p, int T, int N, int M, int N_iters);
-    virtual void forward_backward(float *obs, int *states, float *start_p, float *trans_p, float *emit_p, int T, int N, int M);
 };
