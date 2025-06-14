@@ -6,12 +6,9 @@
 #include <cstring>
 #include <iomanip>
 #include <algorithm>
-#include "hmm.hpp"     // Original CPU implementation header
-#include "hmm_gpu.cuh" // GPU implementation header
+#include "hmm.hpp"     
+#include "hmm_gpu.cuh" 
 
-// -----------------------------------------------------------------------------
-// Configuration Parsing (ported from the user-provided code)
-// -----------------------------------------------------------------------------
 struct HMMConfig
 {
     int N, M;                                // states, observations
@@ -93,9 +90,7 @@ HMMConfig parseConfigFile(const std::string &filename)
     return config;
 }
 
-// -----------------------------------------------------------------------------
 // Helper to flatten 2-D std::vector<float> into 1-D for C-style routines
-// -----------------------------------------------------------------------------
 static void flatten_vector(const std::vector<std::vector<float>> &mat,
                            std::vector<float> &flat)
 {
@@ -104,9 +99,7 @@ static void flatten_vector(const std::vector<std::vector<float>> &mat,
         flat.insert(flat.end(), row.begin(), row.end());
 }
 
-// -----------------------------------------------------------------------------
-// Unified driver capable of running either CPU or GPU implementation
-// -----------------------------------------------------------------------------
+// Main driver function
 static void run(const HMMConfig &cfg, int problem, int iterations,
                 const std::string &impl)
 {
@@ -115,7 +108,6 @@ static void run(const HMMConfig &cfg, int problem, int iterations,
     flatten_vector(cfg.trans_p, A_flat);
     flatten_vector(cfg.emit_p, B_flat);
 
-    // ---------------- CPU branch ----------------
     if (impl == "cpu")
     {
         IHMM hmm_cpu(cfg.N, cfg.M);
@@ -159,7 +151,7 @@ static void run(const HMMConfig &cfg, int problem, int iterations,
             }
             break;
         case 3:
-        { // Baum-Welch (training)
+        { // Baum-Welch
             if (cfg.sequences.empty())
             {
                 std::cerr << "No sequences provided in configuration file." << std::endl;
@@ -174,7 +166,6 @@ static void run(const HMMConfig &cfg, int problem, int iterations,
             const std::vector<int> &obs_int = cfg.sequences[0];
             std::vector<float> obs_f(obs_int.begin(), obs_int.end());
 
-            // std::cout << "got here 1" << std::endl;
             hmm_cpu.baum_welch(obs_f.data(),
                                /*states*/ nullptr,
                                pi_train.data(),
@@ -184,9 +175,8 @@ static void run(const HMMConfig &cfg, int problem, int iterations,
                                cfg.N,
                                cfg.M,
                                iterations);
-            // std::cout << "got here 2" << std::endl;
 
-            // Output trained parameters (same format expected by test suite)
+            // Output trained parameters
             std::cout << std::fixed << std::setprecision(6);
 
             for (int i = 0; i < cfg.N; ++i)
@@ -242,7 +232,6 @@ static void run(const HMMConfig &cfg, int problem, int iterations,
         return;
     }
 
-    // ---------------- GPU branch ----------------
     if (impl == "gpu")
     {
         int max_T = 0;
@@ -273,8 +262,6 @@ static void run(const HMMConfig &cfg, int problem, int iterations,
         }
         else if (problem == 3)
         { // Baum-Welch
-            // std::cout << "got here" << std::endl;
-            // training vectors (copies, as BW mutates them)
             std::vector<float> A_train = A_flat;
             std::vector<float> B_train = B_flat;
             std::vector<float> pi_train = cfg.start_p;
@@ -285,7 +272,7 @@ static void run(const HMMConfig &cfg, int problem, int iterations,
                 return;
             }
 
-            const std::vector<int> &obs = cfg.sequences[0]; // as per original behaviour
+            const std::vector<int> &obs = cfg.sequences[0]; 
             hmm_gpu.baum_welch(obs.data(),
                                A_train.data(),
                                B_train.data(),
@@ -294,7 +281,6 @@ static void run(const HMMConfig &cfg, int problem, int iterations,
                                iterations,
                                1e-5f);
 
-            // Print trained parameters in a format identical to the previous program
             std::cout << std::fixed << std::setprecision(6);
             for (int i = 0; i < cfg.N; ++i)
             {
@@ -396,6 +382,7 @@ int main(int argc, char *argv[])
     try
     {
         HMMConfig cfg = parseConfigFile(cfg_file);
+
         run(cfg, problem, iterations, impl);
     }
     catch (const std::exception &e)

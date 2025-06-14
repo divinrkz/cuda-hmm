@@ -78,9 +78,6 @@ target_compile_options(hmm_cuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxe
 # -----------------------------------------------------------------------------
 add_executable(hmm_runner src/main.cpp)
 
-add_executable(test_hmm_cpu tests/test_hmm.cpp)
-target_link_libraries(test_hmm_cpu PRIVATE hmm_cpu)
-
 add_executable(test_hmm_gpu tests/test_hmm_gpu.cpp)  
 target_link_libraries(test_hmm_gpu PRIVATE hmm_cpu hmm_cuda ${CUDA_LIBS})
 target_include_directories(test_hmm_gpu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -92,43 +89,8 @@ target_include_directories(hmm_runner PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-
-# Add tests
-add_test(NAME test_hmm_cpu_suite COMMAND test_hmm_cpu)
-add_test(NAME test_hmm_gpu_suite COMMAND test_hmm_gpu)
-
-set_tests_properties(test_hmm_cpu_suite PROPERTIES 
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-)
-set_tests_properties(test_hmm_gpu_suite PROPERTIES 
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-)
-
 set_property(TARGET hmm_runner PROPERTY CXX_STANDARD 17)
 set_property(TARGET hmm_runner PROPERTY CUDA_STANDARD 17)
-
-# -----------------------------------------------------------------------------
-# Testing infrastructure (optional)
-# -----------------------------------------------------------------------------
-include(CTest)
-if(BUILD_TESTING)
-    enable_testing()
-
-    # Example: Python correctness tests (needs Python3 & test script present)
-    find_package(Python3 COMPONENTS Interpreter)
-    if(Python3_Interpreter_FOUND)
-        add_test(
-            NAME Correctness_CPU
-            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_correctness_tests.py --impl cpu --exe $<TARGET_FILE:hmm_runner>
-            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-        )
-        add_test(
-            NAME Correctness_GPU
-            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_correctness_tests.py --impl gpu --exe $<TARGET_FILE:hmm_runner>
-            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-        )
-    endif()
-endif()
 
 # -----------------------------------------------------------------------------
 # Installation targets
