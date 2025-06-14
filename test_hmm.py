@@ -186,13 +186,6 @@ def test_baum_welch_algorithm(config_file, impl_type, iterations=10, hmm_executa
     cpp_output = run_cpp_hmm(config_file, "3", impl_type=impl_type, iterations=iterations, hmm_executable=hmm_executable)
     cpp_start, cpp_trans, cpp_emit = parse_cpp_baum_welch_output(cpp_output)
     
-    print('python_start: ', python_start)
-    print('cpp_start: ', cpp_start)
-    print('python_trans: ', python_trans)
-    print('cpp_trans: ', cpp_trans)
-    print('python_emit: ', python_emit)
-    print('cpp_emit: ', cpp_emit)
-    
     start_match, start_msg = compare_matrices([python_start], [cpp_start], tolerance=tol, name="Initial probabilities")
     trans_match, trans_msg = compare_matrices(python_trans, cpp_trans, tolerance=tol, name="Transition matrix")
     emit_match, emit_msg = compare_matrices(python_emit, cpp_emit, tolerance=tol, name="Emission matrix")

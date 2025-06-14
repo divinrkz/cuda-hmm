@@ -82,10 +82,6 @@ add_executable(benchmark_test tests/test_benchmark.cpp)
 target_link_libraries(benchmark_test PRIVATE hmm_cpu hmm_cuda ${CUDA_LIBS})
 target_include_directories(benchmark_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-add_executable(test_hmm_gpu tests/test_hmm_gpu.cpp)  
-target_link_libraries(test_hmm_gpu PRIVATE hmm_cpu hmm_cuda ${CUDA_LIBS})
-target_include_directories(test_hmm_gpu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-
 # Link both implementations (only one will be used at runtime depending on flag)
 target_link_libraries(hmm_runner PRIVATE hmm_cpu hmm_cuda ${CUDA_LIBS})
 

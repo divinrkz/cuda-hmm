@@ -12,6 +12,9 @@ The GPU implementation shows significant speedup compared to the CPU version, es
 - Large observation sequences
 - Complex HMM models with many states.
 
+![Benchmark tests.](https://github.com/divinrkz/cuda-hmm/tree/main/results/benchmark.png)
+**Figure: GPU vs. CPU Speedup for Hidden Markov Model Algorithms (Viterbi, Forward, and Baum-Welch)**
+This benchmark compares the performance of GPU-accelerated HMM algorithms against their CPU implementations across varying numbers of states (N) and sequence lengths (T). Results show negligible or negative speedup for small models (e.g., N = 16), but substantial gains for larger ones. For N = 128 and T = 4096, the GPU achieves over **11x speedup for Viterbi**, **11x for Forward**, and nearly **24x for Baum-Welch**, demonstrating the efficiency of GPU parallelism for large-scale HMMs.
 
 
 ### Potential Improvements
