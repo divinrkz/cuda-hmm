@@ -1,11 +1,9 @@
-// File: hmm_gpu.cuh
 #ifndef HMM_GPU_CUH
 #define HMM_GPU_CUH
 
 #include <vector>
 #include <string>
 
-// A class implementing the state-wise parallel HMM algorithms.
 class HMM_GPU
 {
 public:
@@ -18,8 +16,10 @@ public:
     void baum_welch(const int *h_obs, float *h_A, float *h_B, float *h_pi, int T, int max_iters, float tolerance = 1e-5f);
 
 private:
-    void _forward_internal(const int *h_obs, int T);
-    void _backward_internal(const int *h_obs, int T);
+    void run_forward_pass_internal(int T, const int* h_obs_for_indexing);
+    void run_backward_pass_internal(int T, const int* h_obs_for_indexing);
+    void run_forward_pass_scaled(int T, const int* h_obs_for_indexing);
+    void run_backward_pass_scaled(int T, const int* h_obs_for_indexing);
 
     int N, M, max_T;
 
@@ -34,6 +34,7 @@ private:
     float *d_xi;
     float *d_viterbi_probs;
     int *d_viterbi_paths;
+    float *d_scaling_factors;
 };
 
-#endif // HMM_GPU_CUH
+#endif 

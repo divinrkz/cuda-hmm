@@ -28,8 +28,8 @@ public:
         delete[] emit_p;
     }
 
-    virtual float **forward(float *obs, int *states, float *start_p, float *trans_p, float *emit_p, int T, int N, int M);
-    virtual float **backward(float *obs, int *states, float *start_p, float *trans_p, float *emit_p, int T, int N, int M);
-    virtual std::string viterbi(float *obs, int *states, float *start_p, float *trans_p, float *emit_p, int T, int N, int M);
-    virtual void baum_welch(float *obs, int *states, float *start_p, float *trans_p, float *emit_p, int T, int N, int M, int N_iters);
+    float **forward(float *obs, int *states, float *start_p, float *trans_p, float *emit_p, int T, int N, int M);
+    float **backward(float *obs, int *states, float *start_p, float *trans_p, float *emit_p, int T, int N, int M);
+    std::string viterbi(float *obs, int *states, float *start_p, float *trans_p, float *emit_p, int T, int N, int M);
+    void baum_welch(float *obs, int *states, float *start_p, float *trans_p, float *emit_p, int T, int N, int M, int N_iters);
 };

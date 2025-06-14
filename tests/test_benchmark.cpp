@@ -8,8 +8,7 @@
 #include <cassert>
 #include <cuda_runtime.h>
 
-// Include the provided CPU implementation for comparison
-#include "../include/hmm.hpp" // Assumes your CPU code is in hmm.hpp/cpp
+#include "../include/hmm.hpp"
 #include "../include/data_loader.hpp"
 
 // Helper to generate random HMM data for testing
@@ -129,11 +128,9 @@ void run_benchmarks() {
 }
 
 int main() {
-    std::cout << "HMM GPU Implementation Tests & Benchmarks" << std::endl;
+    std::cout << "HMM GPU Benchmarks" << std::endl;
     std::cout << "==========================================" << std::endl;
-    
-    // You can add correctness tests here by comparing results from CPU and GPU
-    // For example, load a sequence file and check if viterbi paths match.
+
     
     run_benchmarks();
     
