@@ -6,3 +6,5 @@
 *.fatbin
 build/
 .cache/
+*.pyc
+__pycache__/
