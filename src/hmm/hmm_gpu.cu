@@ -21,6 +21,32 @@
 //                STATE-PARALLEL KERNELS (NO TEMPORAL PARALLELISM)            //
 // ========================================================================== //
 
+__global__ void kernel_normalize(float *d_probs, int N)
+{
+    __shared__ float sdata[256];
+    int tid = threadIdx.x;
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    sdata[tid] = (i < N) ? d_probs[i] : 0.0f;
+    __syncthreads();
+    
+    for (int s = blockDim.x/2; s > 0; s >>= 1) {
+        if (tid < s && tid + s < N) {
+            sdata[tid] += sdata[tid + s];
+        }
+        __syncthreads();
+    }
+    
+    if (tid == 0) {
+        float sum = sdata[0];
+        if (sum > 1e-10f) {
+            for (int j = 0; j < N; j++) {
+                d_probs[j] /= sum;
+            }
+        }
+    }
+}
+
 // Kernel: Initialization for Forward and Viterbi at t=0
 __global__ void kernel_init_t0(float *d_out_probs, const float *d_pi, const float *d_B, int obs0, int N, int M)
 {
@@ -120,7 +146,7 @@ __global__ void kernel_compute_gamma_xi(float *d_gamma, float *d_xi, const float
         }
     }
 
-    if (denom < 1e-35f)
+    if (denom < 1e-10f)
     { // Avoid division by zero
         for (int i = threadIdx.x; i < N; i += blockDim.x)
         {
@@ -146,15 +172,15 @@ __global__ void kernel_compute_gamma_xi(float *d_gamma, float *d_xi, const float
 }
 
 // Kernel: Computes the last gamma column gamma(T-1) separately.
-__global__ void kernel_compute_last_gamma(float *d_gamma, const float *d_alpha, int N, int T)
+__global__ void kernel_compute_last_gamma(float *d_gamma, const float *d_alpha, const float *d_beta, int N, int T)
 {
     float denom = 0.0f;
     for (int i = 0; i < N; ++i)
     {
-        denom += d_alpha[(T - 1) * N + i];
+        denom += d_alpha[(T - 1) * N + i]; 
     }
 
-    if (denom < 1e-35f)
+    if (denom < 1e-10f)
     { // Avoid division by zero
         for (int i = threadIdx.x; i < N; i += blockDim.x)
             d_gamma[(T - 1) * N + i] = 1.0f / N;
@@ -164,7 +190,7 @@ __global__ void kernel_compute_last_gamma(float *d_gamma, const float *d_alpha, 
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < N)
     {
-        d_gamma[(T - 1) * N + i] = d_alpha[(T - 1) * N + i] / denom;
+          d_gamma[(T - 1) * N + i] = (d_alpha[(T - 1) * N + i] * d_beta[(T - 1) * N + i]) / denom;
     }
 }
 
@@ -185,7 +211,9 @@ __global__ void kernel_m_step(float *d_pi, float *d_A, float *d_B, const float *
     {
         gamma_sum_A += d_gamma[t * N + i];
     }
-    if (gamma_sum_A > 1e-9)
+
+
+    if (gamma_sum_A > 1e-10f)
     {
         for (int j = threadIdx.x; j < N; j += blockDim.x)
         {
@@ -195,6 +223,10 @@ __global__ void kernel_m_step(float *d_pi, float *d_A, float *d_B, const float *
                 xi_sum += d_xi[(t * N + i) * N + j];
             }
             d_A[i * N + j] = xi_sum / gamma_sum_A;
+        }
+    } else {
+          for (int j = threadIdx.x; j < N; j += blockDim.x) {
+            d_A[i * N + j] = 1.0f / N;
         }
     }
 
@@ -213,6 +245,10 @@ __global__ void kernel_m_step(float *d_pi, float *d_A, float *d_B, const float *
                 }
             }
             d_B[i * M + k] = numer / gamma_sum_B;
+        }
+    } else {
+        for (int k = threadIdx.x; k < M; k += blockDim.x) {
+            d_B[i * M + k] = 1.0f / M;
         }
     }
 }
@@ -396,12 +432,18 @@ void HMM_GPU::_forward_internal(const int *h_obs, int T)
     kernel_init_t0<<<blocks, threads_per_block>>>(d_alpha, d_pi, d_B, h_obs[0], N, M);
     CHECK_CUDA_ERROR(cudaGetLastError());
 
+    // kernel_normalize<<<1, threads_per_block>>>(d_alpha, N);
+    // CHECK_CUDA_ERROR(cudaGetLastError());
+
     // Induction loop on host
     for (int t = 1; t < T; ++t)
     {
         kernel_forward_step<<<blocks, threads_per_block>>>(
             &d_alpha[t * N], &d_alpha[(t - 1) * N], d_A, d_B, h_obs[t], N, M);
         CHECK_CUDA_ERROR(cudaGetLastError());
+
+        // kernel_normalize<<<1, threads_per_block>>>(&d_alpha[t * N], N);
+        // CHECK_CUDA_ERROR(cudaGetLastError());
     }
 }
 
@@ -414,12 +456,18 @@ void HMM_GPU::_backward_internal(const int *h_obs, int T)
     kernel_init_beta<<<blocks, threads_per_block>>>(&d_beta[(T - 1) * N], N);
     CHECK_CUDA_ERROR(cudaGetLastError());
 
+    // kernel_normalize<<<blocks, threads_per_block>>>(d_beta, N);
+    // CHECK_CUDA_ERROR(cudaGetLastError());
+
     // Induction loop
     for (int t = T - 2; t >= 0; --t)
     {
         kernel_backward_step<<<blocks, threads_per_block>>>(
             &d_beta[t * N], &d_beta[(t + 1) * N], d_A, d_B, h_obs[t + 1], N, M);
         CHECK_CUDA_ERROR(cudaGetLastError());
+
+        // kernel_normalize<<<blocks, threads_per_block>>>(d_beta, N);
+        // CHECK_CUDA_ERROR(cudaGetLastError());
     }
 }
 
@@ -446,6 +494,16 @@ void HMM_GPU::baum_welch(const int *h_obs, float *h_A, float *h_B, float *h_pi, 
         this->_forward_internal(h_obs, T);
         this->_backward_internal(h_obs, T);
 
+        // std::vector<float> debug_alpha(N), debug_beta(N);
+        // CHECK_CUDA_ERROR(cudaMemcpy(debug_alpha.data(), d_alpha, N * sizeof(float), cudaMemcpyDeviceToHost));
+        // CHECK_CUDA_ERROR(cudaMemcpy(debug_beta.data(), d_beta, N * sizeof(float), cudaMemcpyDeviceToHost));
+
+        // std::cout << "Alpha[0]: ";
+        // for(int i = 0; i < N; i++) std::cout << debug_alpha[i] << " ";
+        // std::cout << "\nBeta[0]: ";
+        // for(int i = 0; i < N; i++) std::cout << debug_beta[i] << " ";
+        // std::cout << std::endl;
+
         // Check for convergence
         std::vector<float> h_alpha_final(N);
         CHECK_CUDA_ERROR(cudaMemcpy(h_alpha_final.data(), &d_alpha[(T - 1) * N], N * sizeof(float), cudaMemcpyDeviceToHost));
@@ -461,7 +519,7 @@ void HMM_GPU::baum_welch(const int *h_obs, float *h_A, float *h_B, float *h_pi, 
         const int gamma_blocks = (N + threads_per_block - 1) / threads_per_block;
         kernel_compute_gamma_xi<<<T - 1, threads_per_block>>>(d_gamma, d_xi, d_alpha, d_beta, d_A, d_B, d_obs, N, M, T);
         CHECK_CUDA_ERROR(cudaGetLastError());
-        kernel_compute_last_gamma<<<gamma_blocks, threads_per_block>>>(d_gamma, d_alpha, N, T);
+        kernel_compute_last_gamma<<<gamma_blocks, threads_per_block>>>(d_gamma, d_alpha, d_beta, N, T);
         CHECK_CUDA_ERROR(cudaGetLastError());
 
         // --- M-Step ---
